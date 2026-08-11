@@ -29,9 +29,9 @@ prompt = ChatPromptTemplate.from_template(template)
 
 def create_llm():
     if settings.use_local_llm:
-        from langchain_ollama.llms import OllamaLLM
+        from langchain_ollama import ChatOllama
 
-        return OllamaLLM(model=settings.ollama_llm_model)
+        return ChatOllama(model=settings.ollama_llm_model)
 
     if settings.hosted_llm_provider == "openai":
         from langchain_openai import ChatOpenAI

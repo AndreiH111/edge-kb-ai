@@ -255,6 +255,21 @@ class Settings:
         2000,
     )
 
+    # ---- Agentic chat + Jira via MCP ----
+    agent_enabled: bool = _env_bool("AGENT_ENABLED", True)
+    jira_enabled: bool = _env_bool("JIRA_ENABLED", False)
+    jira_url: str = os.getenv("JIRA_URL", "")
+    jira_username: str = os.getenv("JIRA_USERNAME", "")
+    jira_api_token: str = _first_env_value("JIRA_API_TOKEN", default="")
+    jira_read_only: bool = _env_bool("JIRA_READ_ONLY", True)
+    # Optional comma-separated allow-list passed to the MCP server as ENABLED_TOOLS.
+    jira_enabled_tools: str = os.getenv("JIRA_ENABLED_TOOLS", "")
+    # Transport for the Jira MCP server: "stdio" (spawn a subprocess) or
+    # "streamable_http" (connect to an already-running server at jira_mcp_url).
+    jira_mcp_transport: str = os.getenv("JIRA_MCP_TRANSPORT", "stdio")
+    jira_mcp_command: str = os.getenv("JIRA_MCP_COMMAND", "mcp-atlassian")
+    jira_mcp_url: str = os.getenv("JIRA_MCP_URL", "")
+
     @property
     def use_local_llm(self) -> bool:
         return self.llm_mode == "local"

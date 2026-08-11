@@ -4,14 +4,14 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, Cookie, HTTPException, Query, Response, status
 
 from models.schemas import ChatRequest, ChatResponse
-from services.rag_service import answer_question
+from services import agent_service
 
 
 router = APIRouter(tags=["chat"])
 
 
 @router.post("/chat")
-def ask_question(
+async def ask_question(
     response: Response,
     request: Optional[ChatRequest] = Body(default=None),
     question: Optional[str] = Query(default=None, min_length=1),
@@ -32,7 +32,7 @@ def ask_question(
             detail="Provide a question in the JSON body or as a query parameter.",
         )
 
-    answer = answer_question(user_question, user_session_id)
+    result = await agent_service.aanswer_question(user_question, user_session_id)
     response.set_cookie(
         key="ai_session_id",
         value=user_session_id,
@@ -42,5 +42,6 @@ def ask_question(
     return ChatResponse(
         session_id=user_session_id,
         question=user_question,
-        answer=answer,
+        answer=result.answer,
+        tools_used=result.tools_used or None,
     )

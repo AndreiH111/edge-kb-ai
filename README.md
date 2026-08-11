@@ -14,6 +14,7 @@ A FastAPI-based retrieval-augmented generation (RAG) application. Upload documen
 - **Multiple storage backends** — Local filesystem or AWS S3
 - **Session-based chat** — Follow-up questions use conversation history
 - **Source-aware retrieval** — Retrieves relevant context across all indexed files
+- **Agentic chat** — The LLM decides which tools to call (search the knowledge base, or query Jira read-only via an MCP server) instead of a fixed retrieve-then-answer flow, with automatic fallback to the classic RAG chain
 
 ## System Architecture
 
@@ -70,18 +71,29 @@ ollama pull nomic-embed-text
 # Clone and enter the project
 git clone <repo-url> && cd python-rag-learning
 
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
 # Install dependencies
 pip install -r requirements.txt
 
 # Configure (edit .env with your settings)
-cp .env.example .env
+cp .env.example .env        # macOS/Linux
+copy .env.example .env      # Windows
 
 # Start the server
 uvicorn main:app --reload
+```
+
+**Create & activate the virtual environment**
+
+macOS/Linux:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+Windows (PowerShell):
+```powershell
+python -m venv venv
+venv\Scripts\activate
 ```
 
 The API is available at **http://127.0.0.1:8000**. Interactive docs at [`/docs`](http://127.0.0.1:8000/docs).
@@ -90,8 +102,14 @@ On first startup, the app indexes all files in storage. If the vector store alre
 
 ### CLI Mode
 
+macOS/Linux:
 ```bash
 python3 main.py
+```
+
+Windows (PowerShell):
+```powershell
+python main.py
 ```
 
 Type `q` to quit the interactive chat loop.
@@ -213,16 +231,22 @@ The app is configured via environment variables in `.env`. The key mode switches
 | `CHUNKING_MODE` | `local` / `hosted` | How documents are split |
 | `FILE_STORAGE_BACKEND` | `local` / `s3` | Where files are stored |
 | `VECTOR_DB_BACKEND` | `chroma` / `hana` | Where vectors are stored |
+| `AGENT_ENABLED` | `true` / `false` | Agentic tool-calling chat (falls back to classic RAG) |
+| `JIRA_ENABLED` | `true` / `false` | Expose read-only Jira tools via MCP |
 
-See **[CONFIGURATION.md](CONFIGURATION.md)** for the complete variable reference with defaults and examples.
+See **[CONFIGURATION.md](CONFIGURATION.md)** for the complete variable reference with defaults and examples. Enabling agentic chat and Jira is documented in the [Jira (via MCP)](CONFIGURATION.md#jira-via-mcp) section — note it needs a tool-calling LLM and `pip install langchain-mcp-adapters mcp-atlassian`.
 
 ## Testing
 
+macOS/Linux:
 ```bash
-# Activate virtual environment
 source venv/bin/activate
+python -m unittest discover -s tests
+```
 
-# Run all tests
+Windows (PowerShell):
+```powershell
+venv\Scripts\activate
 python -m unittest discover -s tests
 ```
 
@@ -232,8 +256,14 @@ Tests use fake clients and do not require external services or AWS credentials.
 
 Verifies that your AWS credentials can upload/download/delete from the configured bucket:
 
+macOS/Linux:
 ```bash
 venv/bin/python scripts/s3_upload_smoke_test.py
+```
+
+Windows (PowerShell):
+```powershell
+venv\Scripts\python scripts/s3_upload_smoke_test.py
 ```
 
 ## Storage Backends

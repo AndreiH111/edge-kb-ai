@@ -124,6 +124,29 @@ Tuning parameters for the retrieval pipeline and chat session memory.
 
 ---
 
+## Jira (via MCP)
+
+The chat is **agentic**: the LLM decides which tools to call instead of always running a fixed retrieve-then-answer flow. It can search the knowledge base and, when Jira is enabled, query Jira (read-only) through a [Model Context Protocol](https://modelcontextprotocol.io/) server ([`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian)).
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `AGENT_ENABLED` | `true` | Master switch for agentic chat. When `false`, the classic RAG chain is used |
+| `JIRA_ENABLED` | `false` | Enable the Jira MCP tools |
+| `JIRA_URL` | — | Jira Cloud base URL, e.g. `https://your-site.atlassian.net` |
+| `JIRA_USERNAME` | — | Atlassian account email |
+| `JIRA_API_TOKEN` | — | Atlassian API token ([create one](https://id.atlassian.com/manage-profile/security/api-tokens)) |
+| `JIRA_READ_ONLY` | `true` | Restrict the MCP server to read-only tools |
+| `JIRA_ENABLED_TOOLS` | — | Optional comma-separated allow-list of MCP tools (empty = all read tools) |
+| `JIRA_MCP_TRANSPORT` | `stdio` | `stdio` spawns the `mcp-atlassian` process; `streamable_http` connects to a running server |
+| `JIRA_MCP_COMMAND` | `mcp-atlassian` | Console script to spawn for `stdio` transport |
+| `JIRA_MCP_URL` | — | Server URL (only for `streamable_http` transport) |
+
+> **Requires extra packages:** `pip install langchain-mcp-adapters mcp-atlassian`, plus the `JIRA_*` env vars above.
+
+> **Needs a tool-calling LLM.** Hosted OpenAI/Groq support tools natively; for local Ollama use a tool-capable model (e.g. `llama3.1`, `qwen2.5`). The default `gemma4` **cannot** tool-call, so agentic features stay off and the app transparently falls back to the classic RAG chain. If the Jira connection or the agent build fails, the app logs a warning and serves a retrieval-only (or legacy) response — it never crashes on a missing MCP server.
+
+---
+
 ## Vector Store
 
 Controls where embeddings are persisted and searched.

@@ -12,6 +12,7 @@ class ChatResponse(BaseModel):
     session_id: str
     question: str
     answer: str
+    tools_used: Optional[List[str]] = None
 
 
 class FileUploadResponse(BaseModel):

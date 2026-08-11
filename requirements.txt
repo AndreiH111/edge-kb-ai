@@ -22,3 +22,8 @@ boto3
 # Uncomment the following when using VECTOR_DB_BACKEND=hana
 # hdbcli
 # langchain-hana
+
+# Optional: agentic chat + Jira via MCP (requires JIRA_* env vars)
+langgraph
+langchain-mcp-adapters
+mcp-atlassian

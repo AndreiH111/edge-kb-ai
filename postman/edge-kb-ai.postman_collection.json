@@ -1,0 +1,361 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "name": "edge-kb-ai",
+    "description": "Test collection for the edge-kb-ai FastAPI RAG service.\n\nAll routes are prefixed with `/ai`. Set the `baseUrl` variable (default `http://127.0.0.1:8000`) or select the **edge-kb-ai (local)** environment.\n\nRequests that create a session or a job automatically save `session_id` / `job_id` into collection variables via test scripts, so you can run **Ask Follow-up** and **Get Job by ID** right after.\n\nHappy-path status codes: chat/list/delete = 200, upload/reindex = 202.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Chat",
+      "item": [
+        {
+          "name": "Ask Question (JSON body)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has answer', () => pm.expect(body).to.have.property('answer').that.is.a('string'));",
+                  "pm.test('echoes question', () => pm.expect(body).to.have.property('question'));",
+                  "if (body.session_id) {",
+                  "  pm.collectionVariables.set('session_id', body.session_id);",
+                  "  console.log('saved session_id =', body.session_id);",
+                  "}",
+                  "console.log('tools_used =', JSON.stringify(body.tools_used));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"What internships are available?\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/ai/chat",
+              "host": ["{{baseUrl}}"],
+              "path": ["ai", "chat"]
+            },
+            "description": "Ask a question about the indexed documents. The LLM (agent) decides which tools to call: `search_knowledge_base`, `list_knowledge_base_sources`, and Jira tools if enabled.\n\nThe response sets an httpOnly `ai_session_id` cookie and returns `session_id`, `question`, `answer`, and `tools_used`. This request saves `session_id` for the follow-up request."
+          },
+          "response": []
+        },
+        {
+          "name": "Ask Question (query params)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "if (body.session_id) pm.collectionVariables.set('session_id', body.session_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/ai/chat?question=What internships are available?",
+              "host": ["{{baseUrl}}"],
+              "path": ["ai", "chat"],
+              "query": [
+                { "key": "question", "value": "What internships are available?" },
+                { "key": "session_id", "value": "", "disabled": true }
+              ]
+            },
+            "description": "Alternative to the JSON body: the question can be passed as a query parameter. A `session_id` query param is also accepted (disabled by default here)."
+          },
+          "response": []
+        },
+        {
+          "name": "Ask Follow-up (reuses session_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('same session_id', () => pm.expect(body.session_id).to.eql(pm.collectionVariables.get('session_id')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Tell me more about the first one.\",\n  \"session_id\": \"{{session_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/ai/chat",
+              "host": ["{{baseUrl}}"],
+              "path": ["ai", "chat"]
+            },
+            "description": "Continues the conversation using the `session_id` captured by the first chat request. Chat history is used to resolve follow-up references. Run **Ask Question (JSON body)** first so `{{session_id}}` is populated."
+          },
+          "response": []
+        },
+        {
+          "name": "Ask Question (missing question -> 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/ai/chat",
+              "host": ["{{baseUrl}}"],
+              "path": ["ai", "chat"]
+            },
+            "description": "Negative test: no question in body or query params returns 400 with a helpful detail message."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Files",
+      "item": [
+        {
+          "name": "Upload File",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 202', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.test('returns job_id', () => pm.expect(body).to.have.property('job_id'));",
+                  "if (body.job_id) {",
+                  "  pm.collectionVariables.set('job_id', body.job_id);",
+                  "  console.log('saved job_id =', body.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "REQUIRED. Pick a supported file: .xlsx/.xls/.xlsm, .pdf, or .pptx/.pptm. Click 'Select Files' in the value cell."
+                },
+                {
+                  "key": "uploaded_by",
+                  "value": "postman",
+                  "type": "text",
+                  "description": "Optional uploader label."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/ai/upload",
+              "host": ["{{baseUrl}}"],
+              "path": ["ai", "upload"]
+            },
+            "description": "Upload a document (multipart/form-data). Indexing runs asynchronously; the response returns immediately (202) with a `job_id` you can poll via **Jobs > Get Job by ID**.\n\nErrors: 400 (unsupported type / no filename), 409 (file already exists), 500 (save failed). Do NOT set Content-Type manually — Postman adds the multipart boundary automatically."
+          },
+          "response": []
+        },
+        {
+          "name": "List Files",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has files array', () => pm.expect(body.files).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/ai/files",
+              "host": ["{{baseUrl}}"],
+              "path": ["ai", "files"]
+            },
+            "description": "List files in the configured storage backend (local or S3). Returns `destination`, `location`, and a `files[]` array with filename / uploaded_by / uploaded_at."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Files",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has deleted/not_found arrays', () => {",
+                  "  pm.expect(body.deleted).to.be.an('array');",
+                  "  pm.expect(body.not_found).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filenames\": [\"report.pdf\", \"old-data.xlsx\"]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/ai/files",
+              "host": ["{{baseUrl}}"],
+              "path": ["ai", "files"]
+            },
+            "description": "Delete one or more files by name. Removes them from storage, the vector store, and metadata. Returns `deleted[]`, `not_found[]`, remaining `indexed_records`, and a message. `filenames` must have at least one entry."
+          },
+          "response": []
+        },
+        {
+          "name": "Reindex All",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 202', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "if (body.job_id) pm.collectionVariables.set('job_id', body.job_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/ai/reindex",
+              "host": ["{{baseUrl}}"],
+              "path": ["ai", "reindex"]
+            },
+            "description": "Rebuild the entire vector store from all files in storage. Runs asynchronously (202) and returns a `job_id`. No request body."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Jobs",
+      "item": [
+        {
+          "name": "List Jobs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has jobs array', () => pm.expect(body.jobs).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/ai/jobs",
+              "host": ["{{baseUrl}}"],
+              "path": ["ai", "jobs"]
+            },
+            "description": "List all background jobs (upload/index and reindex) with their status, type, and results."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Job by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('matches requested job_id', () => pm.expect(body.job_id).to.eql(pm.collectionVariables.get('job_id')));",
+                  "console.log('job status =', body.status);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/ai/jobs/{{job_id}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["ai", "jobs", "{{job_id}}"]
+            },
+            "description": "Get the status of a single job. Uses the `{{job_id}}` captured by **Upload File** or **Reindex All**. Returns 404 if the id is unknown. Poll this until `status` is `complete` or `failed`."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8000", "type": "string" },
+    { "key": "session_id", "value": "", "type": "string" },
+    { "key": "job_id", "value": "", "type": "string" }
+  ]
+}

@@ -7,6 +7,7 @@ from api.routes.delete import router as delete_router
 from api.routes.files import router as files_router
 from api.routes.jobs import router as jobs_router
 from api.routes.upload import router as upload_router
+from services import agent_service
 from services.job_queue import job_queue
 from services.rag_service import answer_question
 
@@ -14,7 +15,8 @@ from services.rag_service import answer_question
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     job_queue.start()
-    yield
+    async with agent_service.lifespan_agent():
+        yield
 
 
 app = FastAPI(lifespan=lifespan)
