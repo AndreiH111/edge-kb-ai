@@ -1,194 +1,107 @@
-# Plan: Make the chat agentic + add Jira via MCP
+# CLAUDE.md
 
-## Context
+Guidance for Claude Code working in this repository. Keep it concise and current; delete anything that goes stale.
 
-Today `edge-kb-ai` is a **classic (non-agentic) RAG pipeline**. `services/rag_service.py`
-builds one LCEL chain `prompt | model | StrOutputParser` (`rag_service.py:73`) and
-`answer_question()` (`rag_service.py:172-194`) *always* runs retrieval, stuffs the result
-into a `{context}` variable, and returns a string. The LLM never decides anything — the only
-"routing" is a hand-rolled keyword heuristic `is_exhaustive_data_request` (`rag_service.py:112-152`).
+## Project
 
-Goal:
-1. **Make the chat agentic** — let the LLM decide which tool(s) to call (search the knowledge
-   base, and now query Jira) instead of a fixed retrieve-then-answer flow.
-2. **Add Jira via MCP** — connect a Model Context Protocol server that exposes Jira tools.
+`edge-kb-ai` is a FastAPI retrieval-augmented-generation (RAG) service. Users upload documents (Excel/PDF/PowerPoint) which are parsed, chunked, embedded, and indexed into a vector store; the `/ai/chat` endpoints answer questions about them.
 
-**Decisions locked with the user:** community **`mcp-atlassian`** server · **Jira Cloud** ·
-**read-only** access.
+Chat is **agentic**: a LangGraph tool-calling agent decides whether to search the knowledge base or query Jira (read-only, via an MCP server), and falls back to a classic retrieve-then-answer chain when no tool-capable LLM/agent is available.
 
-### Why this is straightforward here
-- **LangGraph 1.2.10 is already installed** (transitively via LangChain 1.x), including
-  `langgraph.prebuilt.create_react_agent` and `ToolNode`. The agent runtime exists today.
-- `ChatOpenAI` / `ChatGroq` (already used) support `.bind_tools()`. Only the **local Ollama
-  path is a problem**: it uses `OllamaLLM` (a text-completion class that can't tool-call) and
-  defaults to `gemma4` (no native tool support).
-- Retrieval is a single function `embed_service.retrieve_from_all_sources(query) -> List[Document]`
-  (`embed_service.py:297-340`) — trivial to wrap as an agent tool.
-- `main.py` already has an `@asynccontextmanager` **lifespan** (`main.py:14-20`) — the correct
-  place to open/close the async MCP session.
+Python 3.13, Windows-first (venv at `./venv`). LLM, embeddings, vector store, and file storage are all swappable via env vars.
 
-## What's missing / must be added
-- `langchain-mcp-adapters` + the `mcp-atlassian` server package (neither installed).
-- An **agent** that binds tools to the chat model.
-- An **async path**: MCP tools are async, so the chat route/service must go `async`.
-- Config + docs for the new `JIRA_*` / `AGENT_*` settings.
+## Commands
 
----
+Run from the repo root with the venv Python (`venv\Scripts\python.exe`), or activate first with `venv\Scripts\Activate.ps1`.
 
-## Implementation
+```powershell
+# Install dependencies
+venv\Scripts\python.exe -m pip install -r requirements.txt
 
-### 1. `requirements.txt` — add deps (unpinned, matching repo convention)
-Append an optional block:
+# Run the API — http://127.0.0.1:8000 (interactive docs at /docs)
+venv\Scripts\python.exe -m uvicorn main:app --reload
+
+# Interactive CLI chat (uses the legacy sync path)
+venv\Scripts\python.exe main.py
+
+# Run all tests (unittest; no external services required)
+venv\Scripts\python.exe -m unittest discover -s tests
+
+# Run a single test module
+venv\Scripts\python.exe -m unittest tests.test_agent_service
 ```
-# Optional: agentic chat + Jira via MCP (requires JIRA_* env vars)
-langgraph
-langchain-mcp-adapters
-mcp-atlassian
-```
-(`langgraph` is currently only transitive; pin it explicitly since we now depend on it directly.
-`mcp` SDK arrives transitively. Installing `mcp-atlassian` gives a `mcp-atlassian` console script
-we can spawn over stdio — **no `uv`/Docker required**.)
 
-### 2. `core/config.py` — add settings (frozen-dataclass + `os.getenv` style, per existing convention)
-Add fields to `Settings` (`config.py:137+`):
-- `agent_enabled: bool = _env_bool("AGENT_ENABLED", True)`
-- `jira_enabled: bool = _env_bool("JIRA_ENABLED", False)`
-- `jira_url: str = os.getenv("JIRA_URL", "")`
-- `jira_username: str = os.getenv("JIRA_USERNAME", "")`
-- `jira_api_token: str = _first_env_value("JIRA_API_TOKEN", default="")`
-- `jira_read_only: bool = _env_bool("JIRA_READ_ONLY", True)`
-- `jira_enabled_tools: str = os.getenv("JIRA_ENABLED_TOOLS", "")`  # optional comma list
-- `jira_mcp_transport: str = os.getenv("JIRA_MCP_TRANSPORT", "stdio")`  # stdio | streamable_http
-- `jira_mcp_command: str = os.getenv("JIRA_MCP_COMMAND", "mcp-atlassian")`
-- `jira_mcp_url: str = os.getenv("JIRA_MCP_URL", "")`  # only for streamable_http
+No linter/formatter, `pyproject.toml`, or `Makefile` is configured — this is a plain `requirements.txt` + `unittest` project.
 
-### 3. NEW `services/agent_service.py` — the agentic core
-Holds tool definitions, the MCP client lifecycle, agent construction, and the async answer fn.
+## Architecture
 
-- **Retrieval tools** (reuse existing code):
-  - `search_knowledge_base(query: str) -> str` — wraps `embed_service.retrieve_from_all_sources`
-    + `rag_service.format_context`. Docstring tells the LLM to use it for the uploaded docs.
-  - `list_knowledge_base_sources() -> str` — wraps `embed_service.get_indexed_sources()`.
-- **Jira MCP config builder** `_jira_mcp_config()` — returns the `MultiServerMCPClient` dict:
-  - stdio: `{"jira": {"command": settings.jira_mcp_command, "args": [...], "transport": "stdio",
-    "env": {"JIRA_URL":..., "JIRA_USERNAME":..., "JIRA_API_TOKEN":...,
-    "READ_ONLY_MODE": "true", ["ENABLED_TOOLS": settings.jira_enabled_tools]}}}`
-  - streamable_http: `{"jira": {"transport": "streamable_http", "url": settings.jira_mcp_url}}`
-- **`lifespan_agent()`** — `@asynccontextmanager`. Uses `contextlib.AsyncExitStack`:
-  builds `create_llm()` + retrieval tools; if `settings.jira_enabled`, opens
-  `MultiServerMCPClient(...).session("jira")` via the stack and `load_mcp_tools(session)`
-  (keeps ONE MCP subprocess/connection alive for the whole app lifetime). Builds
-  `create_react_agent(llm, tools, prompt=SYSTEM_PROMPT)` and stores it in a module global.
-  **Resilient**: if Jira is disabled or the connection fails, log a warning and build a
-  retrieval-only agent (still agentic). Clears the agent on shutdown.
-- **`async def aanswer_question(question, session_id) -> str`**:
-  - Keep the existing fast-path `is_exhaustive_data_request` → `format_all_records` shortcut.
-  - Reuse the existing `chat_sessions` history dict: convert stored `{role,content}` →
-    `HumanMessage`/`AIMessage`, append the new question, `await agent.ainvoke({"messages": ...})`,
-    take the final message content, persist via `add_chat_history`.
-  - **Graceful fallback**: if no agent is built (`agent_enabled` false) OR the invoke raises a
-    tool-calling error (e.g. gemma4), fall back to the legacy sync `rag_service.answer_question`.
+Thin routers over service modules. All routes are prefixed `/ai`.
 
-### 4. `services/rag_service.py` — one swap + keep legacy intact
-- `create_llm()` local branch: `OllamaLLM` → **`ChatOllama`** (`rag_service.py:32-34`). Safe for
-  the legacy LCEL chain too (chat model works with `ChatPromptTemplate | model | StrOutputParser`)
-  and is the tool-calling-capable class. Everything else in `rag_service.py` stays as the fallback.
+- `main.py` — FastAPI app + lifespan (starts the job queue, opens the agent/MCP session). Also a `__main__` CLI loop that calls the legacy sync path.
+- `api/routes/` — `chat.py` (`/ai/chat`, `/ai/chat/stream` SSE, `/ai/agent-status`), `upload.py`, `files.py`, `delete.py`, `jobs.py`.
+- `core/config.py` — every setting as a frozen `Settings` dataclass read from env/`.env`. Add new config here via the `_env_*` helpers.
+- `models/schemas.py` — Pydantic request/response models.
+- `services/` — key modules:
+  - `agent_service.py` — the agentic core: LangGraph `create_react_agent`, KB tools, Jira MCP loading, SSE streaming (`astream_answer`), and `AgentStatus`.
+  - `rag_service.py` — the classic LCEL chain, `create_llm()`, in-memory `chat_sessions`, and the exhaustive-dump fast path. This is the agent's fallback.
+  - `embed_service.py` — vector store + `retrieve_from_all_sources`. **Importing it runs `initialize_on_startup()`** (vector store + S3 sync) — heavy; keep it out of unit tests.
+  - `vectorstore_service.py` (Chroma / SAP HANA), `storage_service.py` (local / S3), `job_queue.py` (async upload/reindex).
+  - Parsing & chunking: `excel_service.py`, `pdf_service.py`, `ppt_service.py`, `chunking_service.py`, `classifier_service.py`.
+  - Support: `file_service.py`, `metadata_service.py`, `hash_embedding_service.py`.
 
-### 5. `main.py` — wire the agent into lifespan
-Wrap the existing body: after `job_queue.start()`, `async with agent_service.lifespan_agent(): yield`
-(`main.py:14-17`). The MCP session opens on startup and closes on shutdown.
+## Conventions
 
-### 6. `api/routes/chat.py` — go async
-Make the route `async def` and `answer = await agent_service.aanswer_question(user_question, user_session_id)`
-(`chat.py:35`). Session/cookie handling unchanged. (CLI in `main.py` keeps calling the sync
-legacy `answer_question` to avoid async/MCP lifecycle off-server.)
+- **Config:** don't read `os.getenv` outside `core/config.py`; add a field to `Settings` and reference `settings.<field>`.
+- **Lazy imports:** `agent_service` imports `rag_service`/`embed_service` *inside functions* so the module stays cheap to import (tests depend on this). Follow that pattern for heavy deps.
+- **Tests:** `unittest`, no network. Fakes are injected via `sys.modules` (`inject_services` / `inject_modules` in `tests/test_agent_service.py`); the agent is driven by fake tool-calling models or a scripted `astream`. Never import real services into a test.
+- **Style:** 4-space indent, type hints and short docstrings on new functions; match the surrounding module.
+- **Docs:** user-facing config lives in `CONFIGURATION.md`, features/endpoints in `README.md` — update them when behavior changes.
+- **Secrets:** never commit credentials; real values live in `.env` (gitignored). `CLAUDE.md` becomes part of the prompt — keep it secret-free.
 
-### 7. `models/schemas.py` — (optional, additive) surface tool usage
-Add `tools_used: Optional[List[str]] = None` to `ChatResponse` (`schemas.py:11-14`); populate by
-scanning the agent result messages for tool calls. Non-breaking.
+## Ponytail — lazy senior dev mode
 
-### 8. Docs
-- `.env.example`: new `# ---- Jira / MCP (agentic chat) ----` block with the `JIRA_*` / `AGENT_ENABLED` keys.
-- `CONFIGURATION.md`: new `## Jira (via MCP)` section — `Variable | Default | Description` table +
-  a `>` note that it needs `pip install langchain-mcp-adapters mcp-atlassian` and `JIRA_*` env vars.
-- `README.md`: note that chat is agentic and can query Jira read-only.
+Vendored from the [ponytail](https://github.com/DietrichGebert/ponytail) skill (`AGENTS.md`) and inlined here because installing Claude Code skills is blocked in this environment. Apply it to all code work in this repo.
 
-### 9. Tests
-`tests/test_agent_service.py`: a fake tool-calling chat model + a fake tool; assert the agent
-invokes the tool and that `aanswer_question` falls back to the legacy chain when the model raises.
+You are a lazy senior developer. Lazy means efficient, not careless. The best code is the code never written.
 
----
+Before writing any code, stop at the first rung that holds:
 
-## Important caveat — the agent needs a tool-capable LLM
-The local default `OLLAMA_LLM_MODEL=gemma4` **cannot** tool-call, so agentic features won't
-activate on it (the code gracefully falls back to today's RAG chain). To actually get agentic
-behavior, use one of: hosted **OpenAI/Groq** (support tools natively), or a tool-capable **Ollama**
-model (e.g. `llama3.1`, `qwen2.5`).
+1. Does this need to be built at all? (YAGNI)
+2. Does it already exist in this codebase? Reuse the helper, util, or pattern that's already here — don't rewrite it.
+3. Does the standard library already do this? Use it.
+4. Does a native platform feature cover it? Use it.
+5. Does an already-installed dependency solve it? Use it.
+6. Can this be one line? Make it one line.
+7. Only then: write the minimum code that works.
 
-## Verification
-1. `pip install -r requirements.txt`.
-2. `.env`: a tool-capable LLM (e.g. `LLM_MODE=hosted`, `HOSTED_LLM_PROVIDER=openai`, key set) +
-   `AGENT_ENABLED=true`, `JIRA_ENABLED=true`, `JIRA_URL=https://<site>.atlassian.net`,
-   `JIRA_USERNAME=<email>`, `JIRA_API_TOKEN=<token>`.
-3. `uvicorn main:app --reload` → logs should show Jira MCP tools loaded.
-4. `POST /ai/chat` "what internships are in the docs?" → agent calls `search_knowledge_base`.
-5. `POST /ai/chat` "what are my open Jira issues in project ABC?" → agent calls `jira_search`.
-6. Regression: set local `gemma4` → request still returns an answer (legacy fallback path).
-7. `python -m unittest discover -s tests` (existing suite + new `test_agent_service`).
+The ladder runs *after* you understand the problem, not instead of it: read the task and the code it touches, trace the real flow end to end, then climb.
 
-## Files touched
-`requirements.txt`, `core/config.py`, `services/agent_service.py` (new), `services/rag_service.py`,
-`main.py`, `api/routes/chat.py`, `models/schemas.py`, `.env.example`, `CONFIGURATION.md`,
-`README.md`, `tests/test_agent_service.py` (new).
+**Bug fix = root cause, not symptom.** Grep every caller of the function you touch and fix the shared function once — one guard there is a smaller diff than one per caller, and patching only the path the ticket names leaves a sibling caller broken.
 
----
+Rules:
 
-## Reference: how the MCP wiring looks in code
+- No abstractions that weren't explicitly requested.
+- No new dependency if it can be avoided.
+- No boilerplate nobody asked for.
+- Deletion over addition. Boring over clever. Fewest files possible.
+- Shortest working diff wins — but only once you understand the problem. The smallest change in the wrong place isn't lazy, it's a second bug.
+- Question complex requests: "Do you actually need X, or does Y cover it?"
+- When two stdlib approaches are the same size, pick the edge-case-correct one — lazy means less code, not the flimsier algorithm.
+- Mark deliberate simplifications that cut a real corner with a `ponytail:` comment naming the ceiling and upgrade path (e.g. global lock, O(n²) scan, naive heuristic).
 
-```python
-# services/agent_service.py (sketch)
-import contextlib, logging
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.tools import load_mcp_tools
-from langgraph.prebuilt import create_react_agent
-from core.config import settings
-from services import embed_service, rag_service
+Not lazy about: understanding the problem; input validation at trust boundaries; error handling that prevents data loss; security; accessibility; anything explicitly requested. Non-trivial logic leaves ONE runnable check behind — the smallest thing that fails if the logic breaks (an assert-based self-check or one small test file; no frameworks, no fixtures). Trivial one-liners need no test.
 
-logger = logging.getLogger(__name__)
-_agent = None
+## Gotchas (project-specific)
 
-@tool
-def search_knowledge_base(query: str) -> str:
-    """Search the uploaded documents (Excel/PDF/PowerPoint) for info relevant to the query."""
-    docs = embed_service.retrieve_from_all_sources(query)
-    return rag_service.format_context(docs) if docs else "No relevant context found."
+- **The agent needs a tool-capable LLM.** The local default `OLLAMA_LLM_MODEL=gemma4` can't tool-call, so agentic features silently fall back to the classic RAG chain. Use hosted OpenAI/Groq or a tool-capable Ollama model (`llama3.1`, `qwen2.5`).
+- **`GET /ai/agent-status` is the source of truth** for whether the agent and Jira tools loaded (`jira_loaded`, `tools`, `jira_error`). Failures degrade silently to a retrieval-only or legacy answer.
+- **Jira MCP over stdio spawns `JIRA_MCP_COMMAND` via PATH.** On Windows set it to the absolute `...\venv\Scripts\mcp-atlassian.exe`, or launch uvicorn from the activated venv.
+- **Too many tool schemas can exceed the LLM's token/rate limit.** Binding all ~38 Jira tools adds thousands of tokens per request; on low tiers (e.g. Groq's 8000 TPM) this returns `413`, the agent throws, and it falls back to the legacy chain ("I don't have that information"). Restrict `JIRA_ENABLED_TOOLS` to a few tools.
+- **`.env` changes require a full server restart** — `--reload` only watches `.py` files.
+- `langgraph.prebuilt.create_react_agent` is deprecated (moved to `langchain.agents`) but intentionally kept under the pinned `langgraph<2`.
 
-def _jira_mcp_config() -> dict:
-    if settings.jira_mcp_transport == "streamable_http":
-        return {"jira": {"transport": "streamable_http", "url": settings.jira_mcp_url}}
-    return {"jira": {
-        "command": settings.jira_mcp_command, "args": [], "transport": "stdio",
-        "env": {"JIRA_URL": settings.jira_url, "JIRA_USERNAME": settings.jira_username,
-                "JIRA_API_TOKEN": settings.jira_api_token, "READ_ONLY_MODE": "true"},
-    }}
+## Reference
 
-@contextlib.asynccontextmanager
-async def lifespan_agent():
-    global _agent
-    if not settings.agent_enabled:
-        yield; return
-    tools = [search_knowledge_base]
-    async with contextlib.AsyncExitStack() as stack:
-        if settings.jira_enabled:
-            try:
-                client = MultiServerMCPClient(_jira_mcp_config())
-                session = await stack.enter_async_context(client.session("jira"))
-                tools += await load_mcp_tools(session)
-            except Exception as e:
-                logger.warning("Jira MCP unavailable, retrieval-only agent: %s", e)
-        _agent = create_react_agent(rag_service.create_llm(), tools, prompt=SYSTEM_PROMPT)
-        yield
-    _agent = None
-```
+- `README.md` — features, endpoints, usage examples, project structure.
+- `CONFIGURATION.md` — every env var with defaults (LLM, embeddings, chunking, vector store, storage, Jira/MCP).
+- `.env.example` — template `.env` to copy.
