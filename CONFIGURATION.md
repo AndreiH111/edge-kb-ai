@@ -141,7 +141,13 @@ The chat is **agentic**: the LLM decides which tools to call instead of always r
 | `JIRA_MCP_COMMAND` | `mcp-atlassian` | Console script to spawn for `stdio` transport |
 | `JIRA_MCP_URL` | — | Server URL (only for `streamable_http` transport) |
 
-> **Requires extra packages:** `pip install langchain-mcp-adapters mcp-atlassian`, plus the `JIRA_*` env vars above.
+> **Requires extra packages:** `pip install langchain-mcp-adapters mcp-atlassian`, plus the `JIRA_*` env vars above. These optional deps are pinned in `requirements.txt` (`langchain-mcp-adapters>=0.3,<0.4`, `mcp-atlassian>=0.23,<0.24`) because the networked MCP integration and the langgraph 1.x API move quickly; run `pip check` after installing to catch resolver conflicts.
+
+> **Diagnosing load state:** `GET /ai/agent-status` reports whether the agent and its Jira tools actually loaded — `jira_loaded`, the bound `tools`, and a `jira_error` string when Jira degraded. Use it to tell a genuine failure apart from a silent fallback. If `JIRA_ENABLED=true` but the MCP packages are missing, `jira_error` names the exact `pip install` to run.
+
+> **Tool count vs. token/rate limits:** enabling all Jira tools (~38) injects every tool's JSON schema into each agent request — several thousand extra tokens per call. On low-tier hosted LLM plans (e.g. Groq's 8000 tokens/minute) this can trip `413/429 rate_limit_exceeded`; the agent invocation then throws and falls back to the legacy chain, so the reply looks like "I don't have that information" even though Jira loaded fine. Restrict `JIRA_ENABLED_TOOLS` to the handful you actually need (a good starter set: `jira_search,jira_get_issue,jira_get_all_projects,jira_get_project_issues,jira_get_agile_boards,jira_get_sprints_from_board`) to keep requests small, or upgrade your provider tier.
+
+> **Windows `stdio` PATH:** with `JIRA_MCP_TRANSPORT=stdio` the MCP client spawns `JIRA_MCP_COMMAND` (default `mcp-atlassian`) via `PATH`, so it must resolve to the installed console script. This works when uvicorn is launched from the activated venv. If you launch from outside the venv, set `JIRA_MCP_COMMAND` to the absolute path, e.g. `...\venv\Scripts\mcp-atlassian.exe`.
 
 > **Needs a tool-calling LLM.** Hosted OpenAI/Groq support tools natively; for local Ollama use a tool-capable model (e.g. `llama3.1`, `qwen2.5`). The default `gemma4` **cannot** tool-call, so agentic features stay off and the app transparently falls back to the classic RAG chain. If the Jira connection or the agent build fails, the app logs a warning and serves a retrieval-only (or legacy) response — it never crashes on a missing MCP server.
 

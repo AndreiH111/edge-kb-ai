@@ -15,6 +15,7 @@ A FastAPI-based retrieval-augmented generation (RAG) application. Upload documen
 - **Session-based chat** — Follow-up questions use conversation history
 - **Source-aware retrieval** — Retrieves relevant context across all indexed files
 - **Agentic chat** — The LLM decides which tools to call (search the knowledge base, or query Jira read-only via an MCP server) instead of a fixed retrieve-then-answer flow, with automatic fallback to the classic RAG chain
+- **Streaming (SSE)** — `POST /ai/chat/stream` streams replies token-by-token as Server-Sent Events (`tool`, `token`, `done`, `error`)
 
 ## System Architecture
 
@@ -121,6 +122,8 @@ All routes are prefixed with `/ai`.
 | Method | Endpoint | Description | Response |
 | --- | --- | --- | --- |
 | `POST` | `/ai/chat` | Ask a question about indexed documents | 200 — answer |
+| `POST` | `/ai/chat/stream` | Ask a question, stream the reply as SSE | 200 — `text/event-stream` |
+| `GET` | `/ai/agent-status` | Inspect agent / Jira MCP load state | 200 — agent status |
 | `POST` | `/ai/upload` | Upload a file (async indexing) | 202 — job accepted |
 | `GET` | `/ai/files` | List files in storage | 200 — file list |
 | `DELETE` | `/ai/files` | Delete one or more files | 200 — deletion result |
@@ -160,7 +163,41 @@ curl -X POST http://127.0.0.1:8000/ai/chat \
 ```
 
 ```json
-{"session_id": "uuid-here", "question": "What internships are available?", "answer": "Based on the documents..."}
+{"session_id": "uuid-here", "question": "What internships are available?", "answer": "Based on the documents...", "tools_used": ["search_knowledge_base"]}
+```
+
+**Ask a question (streaming SSE):**
+
+`-N` disables curl's buffering so events arrive as they are produced.
+
+```bash
+curl -N -X POST http://127.0.0.1:8000/ai/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What internships are available?"}'
+```
+
+```
+event: tool
+data: {"name": "search_knowledge_base"}
+
+event: token
+data: {"text": "Based on "}
+
+event: token
+data: {"text": "the documents..."}
+
+event: done
+data: {"session_id": "uuid-here", "answer": "Based on the documents...", "tools_used": ["search_knowledge_base"]}
+```
+
+**Check agent / Jira status:**
+
+```bash
+curl http://127.0.0.1:8000/ai/agent-status
+```
+
+```json
+{"agent_enabled": true, "agent_ready": true, "jira_enabled": false, "jira_loaded": false, "tool_count": 2, "tools": ["search_knowledge_base", "list_knowledge_base_sources"], "jira_error": null}
 ```
 
 **List files:**
@@ -198,6 +235,7 @@ python-rag-learning/
 ├── models/
 │   └── schemas.py           # Pydantic request/response models
 ├── services/
+│   ├── agent_service.py     # Agentic chat: tool-calling agent, MCP/Jira, streaming
 │   ├── chunking_service.py  # Semantic + rule-based document chunking
 │   ├── classifier_service.py # Excel sheet structure classification
 │   ├── embed_service.py     # Vector store management and retrieval

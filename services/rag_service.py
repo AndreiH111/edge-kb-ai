@@ -138,18 +138,17 @@ def is_exhaustive_data_request(question: str) -> bool:
 
     asks_about_data = any(term in normalized_question for term in data_terms)
     asks_for_everything = any(term in normalized_question for term in exhaustive_terms)
-    asks_to_list = any(
-        term in normalized_question
-        for term in ("list", "show", "display", "return", "give me", "what are")
-    )
     asks_available_list = (
         "available" in normalized_question
         and ("what" in normalized_question or "list" in normalized_question)
     )
 
-    return (asks_about_data and (asks_for_everything or asks_available_list)) or (
-        asks_for_everything and asks_to_list
-    )
+    # Only treat this as an exhaustive knowledge-base dump when the question
+    # actually refers to the indexed data. Without the ``asks_about_data`` guard,
+    # agent questions like "list all my Jira projects" (no data term, just
+    # "list" + "all") would be hijacked into dumping every KB record instead of
+    # reaching the agent's Jira tools.
+    return asks_about_data and (asks_for_everything or asks_available_list)
 
 
 def format_all_records() -> str:

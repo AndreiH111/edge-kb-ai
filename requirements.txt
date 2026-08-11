@@ -23,7 +23,8 @@ boto3
 # hdbcli
 # langchain-hana
 
-# Optional: agentic chat + Jira via MCP (requires JIRA_* env vars)
-langgraph
-langchain-mcp-adapters
-mcp-atlassian
+# Optional: agentic chat + Jira via MCP (requires JIRA_* env vars).
+# Pinned: networked MCP integration and the langgraph 1.x API move fast.
+langgraph>=1.2,<2
+langchain-mcp-adapters>=0.3,<0.4
+mcp-atlassian>=0.23,<0.24

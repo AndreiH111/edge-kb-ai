@@ -15,6 +15,23 @@ class ChatResponse(BaseModel):
     tools_used: Optional[List[str]] = None
 
 
+class AgentStatusResponse(BaseModel):
+    """Inspectable state of the agent built during the app lifespan.
+
+    Mirrors ``agent_service.AgentStatus`` so ``GET /ai/agent-status`` can surface
+    whether the agent and its Jira MCP tools actually loaded (instead of silently
+    degrading to a retrieval-only or legacy chain).
+    """
+
+    agent_enabled: bool
+    agent_ready: bool
+    jira_enabled: bool
+    jira_loaded: bool
+    tool_count: int
+    tools: List[str] = Field(default_factory=list)
+    jira_error: Optional[str] = None
+
+
 class FileUploadResponse(BaseModel):
     filename: str
     path: str
