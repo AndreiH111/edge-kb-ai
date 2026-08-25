@@ -19,7 +19,8 @@ from core.config import settings
 from services.classifier_service import SheetClassification, classify_excel_files
 
 
-SEMANTIC_CHUNK_PROMPT = """You are a document chunking assistant. Split the following text into coherent topical sections.
+SEMANTIC_CHUNK_PROMPT = """You are a document chunking assistant. Split the following \
+text into coherent topical sections.
 Return ONLY a JSON array where each element has "title" and "content" keys.
 Each section should be a self-contained topic. Do not omit any content from the original text.
 If the text is already about a single topic, return a single-element array.

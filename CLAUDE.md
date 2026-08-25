@@ -24,14 +24,22 @@ venv\Scripts\python.exe -m uvicorn main:app --reload
 # Interactive CLI chat (uses the legacy sync path)
 venv\Scripts\python.exe main.py
 
-# Run all tests (unittest; no external services required)
-venv\Scripts\python.exe -m unittest discover -s tests
+# Run all tests — pytest runs the service unittests AND the endpoint suite (offline)
+venv\Scripts\python.exe -m pytest -q
 
-# Run a single test module
-venv\Scripts\python.exe -m unittest tests.test_agent_service
+# Just the HTTP endpoint suite (pytest + TestClient) / just the service tests
+venv\Scripts\python.exe -m pytest tests/api -v
+venv\Scripts\python.exe -m pytest tests/unit -v
+
+# Backward-compatible: legacy unittest discovery still finds the moved tests
+venv\Scripts\python.exe -m unittest discover -s tests
+venv\Scripts\python.exe -m unittest tests.unit.test_agent_service
+
+# Lint (pylint, config in .pylintrc) — expected to stay at 10.00/10
+venv\Scripts\python.exe -m pylint api core models services tests main.py conftest.py
 ```
 
-No linter/formatter, `pyproject.toml`, or `Makefile` is configured — this is a plain `requirements.txt` + `unittest` project.
+Config files: `pytest.ini` (`pythonpath=.`, `testpaths=tests`) and `.pylintrc`; no formatter, `pyproject.toml`, or `Makefile`. Service tests are `unittest.TestCase` (run natively by both `pytest` and `unittest`); the endpoint tests are pytest-style and run under `pytest` only. `.pylintrc` fixes genuine defects in code and disables only intentional-pattern / false-positive / design-metric checks (each documented inline) — keep it at 10.00/10.
 
 ## Architecture
 
@@ -51,9 +59,16 @@ Thin routers over service modules. All routes are prefixed `/ai`.
 
 ## Conventions
 
+- **Every code change goes through Ponytail — no exceptions.** Before writing anything, apply the **Ponytail — lazy senior dev mode** rules (full text at the bottom of this file): climb the reuse ladder first (does it need building? does it already exist here / in the stdlib / in an installed dep?), prefer the shortest working diff, delete over add, fix bugs at the root not the symptom, and add no abstraction/dependency/boilerplate nobody asked for.
+- **Always verify before finishing — no exceptions.** After *every* change, run both the tests and the linter and confirm they pass before calling the work done:
+  ```powershell
+  venv\Scripts\python.exe -m pytest -q                                       # all tests must pass
+  venv\Scripts\python.exe -m pylint api core models services tests main.py conftest.py   # must stay 10.00/10
+  ```
+  If either fails, fix it (or, for a justified lint case, disable the specific check in `.pylintrc` with an inline rationale) — never leave the tree red or claim done on unrun checks.
 - **Config:** don't read `os.getenv` outside `core/config.py`; add a field to `Settings` and reference `settings.<field>`.
 - **Lazy imports:** `agent_service` imports `rag_service`/`embed_service` *inside functions* so the module stays cheap to import (tests depend on this). Follow that pattern for heavy deps.
-- **Tests:** `unittest`, no network. Fakes are injected via `sys.modules` (`inject_services` / `inject_modules` in `tests/test_agent_service.py`); the agent is driven by fake tool-calling models or a scripted `astream`. Never import real services into a test.
+- **Tests:** two layers, both offline. `tests/unit/` — service `unittest` tests; fakes injected via `sys.modules` (`inject_services` / `inject_modules` in `tests/unit/test_agent_service.py`), the agent driven by fake tool-calling models or a scripted `astream`. `tests/api/` — pytest + `TestClient` endpoint tests; the root `conftest.py` neutralizes `.env` and pins offline settings, and `tests/api/conftest.py` injects a fake `embed_service` before importing `main` (so the import stays cheap) and drives scenarios with `monkeypatch`. Never import real services (especially `embed_service`) into a test.
 - **Style:** 4-space indent, type hints and short docstrings on new functions; match the surrounding module.
 - **Docs:** user-facing config lives in `CONFIGURATION.md`, features/endpoints in `README.md` — update them when behavior changes.
 - **Secrets:** never commit credentials; real values live in `.env` (gitignored). `CLAUDE.md` becomes part of the prompt — keep it secret-free.

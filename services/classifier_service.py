@@ -345,8 +345,7 @@ def _longest_consecutive_run(values: List[Any]) -> int:
             current_run = 1
             previous_value = value
 
-        if current_run > max_run:
-            max_run = current_run
+        max_run = max(max_run, current_run)
 
     return max_run
 

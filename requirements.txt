@@ -28,3 +28,12 @@ boto3
 langgraph>=1.2,<2
 langchain-mcp-adapters>=0.3,<0.4
 mcp-atlassian>=0.23,<0.24
+
+# testing
+# pytest runs the unittest service tests and the TestClient endpoint suite.
+# httpx is already a FastAPI dependency; declared so fresh venvs get TestClient.
+pytest>=7.0
+httpx
+
+# linting (config in .pylintrc; keep the tree at 10.00/10)
+pylint>=3.0

@@ -49,8 +49,6 @@ def delete_file_from_storage(filename: str, missing_ok: bool = False) -> None:
 
 
 def is_supported_file(filename: str) -> bool:
-    from core.config import settings
-
     return Path(filename).suffix.lower() in settings.supported_file_extensions
 
 

@@ -51,6 +51,7 @@ dist/
 .DS_Store
 .vscode/
 .idea/
+.history/
 
 # Render/local deployment artifacts
 .render/

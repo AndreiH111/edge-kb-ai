@@ -25,7 +25,7 @@ def create_embeddings():
         print("Using Ollama embeddings")
 
         return OllamaEmbeddings(model=settings.ollama_embedding_model)
-    
+
     if settings.use_custom_hash_embeddings:
         print("Using Custom Hash embeddings")
         from services.hash_embedding_service import HashEmbeddings
@@ -227,8 +227,8 @@ def initialize_on_startup() -> int:
         retriever = vector_store.as_retriever(search_kwargs={"k": settings.retriever_k})
         print(f"Vector store has data. Rebuilt in-memory lists: {len(documents)} documents")
         return len(documents)
-    else:
-        return refresh_vector_store()
+
+    return refresh_vector_store()
 
 
 def get_indexed_sources() -> List[str]:

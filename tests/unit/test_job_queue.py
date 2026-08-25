@@ -2,7 +2,7 @@ import threading
 import time
 import unittest
 
-from services.job_queue import Job, JobQueue
+from services.job_queue import JobQueue
 
 
 class TestJobQueue(unittest.TestCase):

@@ -78,7 +78,7 @@ class ChromaVectorStoreTests(unittest.TestCase):
         mock_chroma_class.return_value = mock_instance
 
         with patch("langchain_chroma.Chroma", mock_chroma_class):
-            store = ChromaVectorStore(
+            ChromaVectorStore(
                 collection_name="test_collection",
                 embedding_function=MagicMock(),
                 persist_directory="/tmp/chroma_test",
@@ -96,7 +96,7 @@ class ChromaVectorStoreTests(unittest.TestCase):
         mock_chroma_class.return_value = mock_instance
 
         with patch("langchain_chroma.Chroma", mock_chroma_class):
-            store = ChromaVectorStore(
+            ChromaVectorStore(
                 collection_name="test_collection",
                 embedding_function=MagicMock(),
                 host="chroma.example.com",

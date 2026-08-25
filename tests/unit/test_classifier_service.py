@@ -156,7 +156,7 @@ def test_merged_cells_outside_used_area_do_not_trigger():
     # Merged range is outside the used area (row 0, cols 0-3)
     merged_ranges = [(0, 0, 0, 3)]
 
-    classification, reason = classify_sheet(values, merged_ranges=merged_ranges)
+    classification, _ = classify_sheet(values, merged_ranges=merged_ranges)
 
     # Used area is rows 1-3, cols 1-2. The merge at row 0 cols 0-3 overlaps
     # col 1-2 at row 0 which is outside row bounds 1-3, so it should not trigger.
@@ -239,7 +239,7 @@ def test_small_sparse_table_does_not_trigger():
         [None, None, "C"],
     ]
 
-    classification, reason = classify_sheet(values)
+    classification, _ = classify_sheet(values)
 
     # Will hit "header row contains blank cells" first since row 0 has blanks
     assert classification == "unstructured"
@@ -499,7 +499,7 @@ def test_realistic_pivot_table_is_unstructured():
         ["West Subtotal", None, 70000, 15000],
     ]
 
-    classification, reason = classify_sheet(values)
+    classification, _ = classify_sheet(values)
 
     assert classification == "unstructured"
     # The first check that fires could be "header row contains blank cells"
@@ -539,7 +539,7 @@ def test_merged_cells_plus_multi_row_headers():
     # Title row is merged across 3 columns
     merged_ranges = [(0, 0, 0, 2)]
 
-    classification, reason = classify_sheet(values, merged_ranges=merged_ranges)
+    classification, _ = classify_sheet(values, merged_ranges=merged_ranges)
 
     # Merged cells check fires first (3 columns = not > 3, but it's exactly 3)
     # Wait — threshold is >3 columns, so span of 3 (cols 0-2) = 3 cols doesn't trigger

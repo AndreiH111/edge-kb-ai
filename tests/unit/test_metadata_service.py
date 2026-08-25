@@ -1,12 +1,12 @@
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
 from services.metadata_service import FileMetadataStore
-from services.storage_service import FileDetail, LocalFileStorage
+from services.storage_service import LocalFileStorage
 
 
 class FileMetadataStoreTests(unittest.TestCase):

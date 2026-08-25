@@ -416,7 +416,7 @@ class TestChunkDocuments(unittest.TestCase):
         docs = [self._make_pdf_doc(content)]
         ids = ["f.pdf:page:1"]
 
-        result_docs, result_ids = chunk_documents(docs, ids)
+        result_docs, _ = chunk_documents(docs, ids)
 
         # Should produce multiple chunks via fallback
         self.assertGreater(len(result_docs), 1)
@@ -445,7 +445,7 @@ class TestChunkDocuments(unittest.TestCase):
         docs = [self._make_pdf_doc(content)]
         ids = ["f.pdf:page:1"]
 
-        result_docs, result_ids = chunk_documents(docs, ids)
+        result_docs, _ = chunk_documents(docs, ids)
 
         self.assertEqual(len(result_docs), 2)
         self.assertEqual(result_docs[0].metadata["chunk_title"], "Section 1")
@@ -463,7 +463,7 @@ class TestChunkDocuments(unittest.TestCase):
         docs = [self._make_pdf_doc("Tiny.")]
         ids = ["f.pdf:page:1"]
 
-        result_docs, result_ids = chunk_documents(docs, ids)
+        result_docs, _ = chunk_documents(docs, ids)
 
         self.assertEqual(len(result_docs), 1)
         self.assertEqual(result_docs[0].id, "f.pdf:page:1:chunk:1")
@@ -484,7 +484,7 @@ class TestChunkDocuments(unittest.TestCase):
         docs[1].metadata["page"] = 2
         ids = ["a.pdf:page:1", "a.pdf:page:2"]
 
-        result_docs, result_ids = chunk_documents(docs, ids)
+        _, result_ids = chunk_documents(docs, ids)
 
         # All IDs should be unique
         self.assertEqual(len(result_ids), len(set(result_ids)))
