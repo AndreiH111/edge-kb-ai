@@ -117,8 +117,9 @@ Tuning parameters for the retrieval pipeline and chat session memory.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RETRIEVER_K` | `5` | Total documents retrieved per query |
-| `RETRIEVER_K_PER_SOURCE` | `3` | Documents retrieved per source file |
+| `RETRIEVER_K` | `5` | Documents retrieved per query when the question doesn't name a file (one search across all files) |
+| `RETRIEVER_MAX_FILE_CHARS` | `12000` | When the question names file(s) whose combined text is at most this many characters, the whole file(s) are sent to the LLM (complete answers for small spreadsheets). Lower it for low token-rate tiers |
+| `RETRIEVER_K_PER_SOURCE` | `3` | Documents retrieved from each named file when the named files are too large to send whole |
 | `MAX_CHAT_HISTORY_MESSAGES` | `12` | Messages retained per chat session |
 | `MAX_CHAT_HISTORY_CONTENT_CHARS` | `2000` | Max characters kept per history message |
 

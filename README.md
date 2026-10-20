@@ -1,3 +1,5 @@
+/effort
+
 # Python RAG Learning
 
 A FastAPI-based retrieval-augmented generation (RAG) application. Upload documents, index them into a vector store, and ask questions about their contents using an LLM.
@@ -86,12 +88,14 @@ uvicorn main:app --reload
 **Create & activate the virtual environment**
 
 macOS/Linux:
+
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
 Windows (PowerShell):
+
 ```powershell
 python -m venv venv
 venv\Scripts\activate
@@ -104,11 +108,13 @@ On first startup, the app indexes all files in storage. If the vector store alre
 ### CLI Mode
 
 macOS/Linux:
+
 ```bash
 python3 main.py
 ```
 
 Windows (PowerShell):
+
 ```powershell
 python main.py
 ```
@@ -119,17 +125,17 @@ Type `q` to quit the interactive chat loop.
 
 All routes are prefixed with `/ai`.
 
-| Method | Endpoint | Description | Response |
-| --- | --- | --- | --- |
-| `POST` | `/ai/chat` | Ask a question about indexed documents | 200 — answer |
-| `POST` | `/ai/chat/stream` | Ask a question, stream the reply as SSE | 200 — `text/event-stream` |
-| `GET` | `/ai/agent-status` | Inspect agent / Jira MCP load state | 200 — agent status |
-| `POST` | `/ai/upload` | Upload a file (async indexing) | 202 — job accepted |
-| `GET` | `/ai/files` | List files in storage | 200 — file list |
-| `DELETE` | `/ai/files` | Delete one or more files | 200 — deletion result |
-| `POST` | `/ai/reindex` | Rebuild the entire vector store | 202 — job accepted |
-| `GET` | `/ai/jobs` | List all background jobs | 200 — job list |
-| `GET` | `/ai/jobs/{job_id}` | Get status of a specific job | 200 — job status |
+| Method     | Endpoint              | Description                             | Response                    |
+| ---------- | --------------------- | --------------------------------------- | --------------------------- |
+| `POST`   | `/ai/chat`          | Ask a question about indexed documents  | 200 — answer               |
+| `POST`   | `/ai/chat/stream`   | Ask a question, stream the reply as SSE | 200 —`text/event-stream` |
+| `GET`    | `/ai/agent-status`  | Inspect agent / Jira MCP load state     | 200 — agent status         |
+| `POST`   | `/ai/upload`        | Upload a file (async indexing)          | 202 — job accepted         |
+| `GET`    | `/ai/files`         | List files in storage                   | 200 — file list            |
+| `DELETE` | `/ai/files`         | Delete one or more files                | 200 — deletion result      |
+| `POST`   | `/ai/reindex`       | Rebuild the entire vector store         | 202 — job accepted         |
+| `GET`    | `/ai/jobs`          | List all background jobs                | 200 — job list             |
+| `GET`    | `/ai/jobs/{job_id}` | Get status of a specific job            | 200 — job status           |
 
 ### Usage Examples
 
@@ -262,27 +268,29 @@ python-rag-learning/
 
 The app is configured via environment variables in `.env`. The key mode switches are:
 
-| Setting | Options | Controls |
-| --- | --- | --- |
-| `LLM_MODE` | `local` / `hosted` | Which LLM answers questions |
-| `EMBEDDING_MODE` | `local` / `custom` / `hosted` | How text becomes vectors |
-| `CHUNKING_MODE` | `local` / `hosted` | How documents are split |
-| `FILE_STORAGE_BACKEND` | `local` / `s3` | Where files are stored |
-| `VECTOR_DB_BACKEND` | `chroma` / `hana` | Where vectors are stored |
-| `AGENT_ENABLED` | `true` / `false` | Agentic tool-calling chat (falls back to classic RAG) |
-| `JIRA_ENABLED` | `true` / `false` | Expose read-only Jira tools via MCP |
+| Setting                  | Options                             | Controls                                              |
+| ------------------------ | ----------------------------------- | ----------------------------------------------------- |
+| `LLM_MODE`             | `local` / `hosted`              | Which LLM answers questions                           |
+| `EMBEDDING_MODE`       | `local` / `custom` / `hosted` | How text becomes vectors                              |
+| `CHUNKING_MODE`        | `local` / `hosted`              | How documents are split                               |
+| `FILE_STORAGE_BACKEND` | `local` / `s3`                  | Where files are stored                                |
+| `VECTOR_DB_BACKEND`    | `chroma` / `hana`               | Where vectors are stored                              |
+| `AGENT_ENABLED`        | `true` / `false`                | Agentic tool-calling chat (falls back to classic RAG) |
+| `JIRA_ENABLED`         | `true` / `false`                | Expose read-only Jira tools via MCP                   |
 
 See **[CONFIGURATION.md](CONFIGURATION.md)** for the complete variable reference with defaults and examples. Enabling agentic chat and Jira is documented in the [Jira (via MCP)](CONFIGURATION.md#jira-via-mcp) section — note it needs a tool-calling LLM and `pip install langchain-mcp-adapters mcp-atlassian`.
 
 ## Testing
 
 macOS/Linux:
+
 ```bash
 source venv/bin/activate
 python -m unittest discover -s tests
 ```
 
 Windows (PowerShell):
+
 ```powershell
 venv\Scripts\activate
 python -m unittest discover -s tests
@@ -295,29 +303,31 @@ Tests use fake clients and do not require external services or AWS credentials.
 Verifies that your AWS credentials can upload/download/delete from the configured bucket:
 
 macOS/Linux:
+
 ```bash
 venv/bin/python scripts/s3_upload_smoke_test.py
 ```
 
 Windows (PowerShell):
+
 ```powershell
 venv\Scripts\python scripts/s3_upload_smoke_test.py
 ```
 
 ## Storage Backends
 
-| Backend | Config | Notes |
-| --- | --- | --- |
-| **Local** | `FILE_STORAGE_BACKEND=local` | Files in `data/` directory |
-| **AWS S3** | `FILE_STORAGE_BACKEND=s3` | Syncs to local cache for parsing. Example policies in `aws/`. |
+| Backend          | Config                         | Notes                                                          |
+| ---------------- | ------------------------------ | -------------------------------------------------------------- |
+| **Local**  | `FILE_STORAGE_BACKEND=local` | Files in`data/` directory                                    |
+| **AWS S3** | `FILE_STORAGE_BACKEND=s3`    | Syncs to local cache for parsing. Example policies in`aws/`. |
 
 ## Vector Store Backends
 
-| Backend | Config | Notes |
-| --- | --- | --- |
-| **ChromaDB local** | `CHROMA_MODE=local` | Persists to `chrome_langchain_db/`. No external services needed. |
-| **ChromaDB HTTP** | `CHROMA_MODE=http` | Connects to a remote Chroma server. Set `CHROMA_HOST`/`CHROMA_PORT`. |
-| **SAP HANA Cloud** | `VECTOR_DB_BACKEND=hana` | Requires `hdbcli` and `langchain-hana`. Set `HANA_DB_*` vars. |
+| Backend                  | Config                     | Notes                                                                   |
+| ------------------------ | -------------------------- | ----------------------------------------------------------------------- |
+| **ChromaDB local** | `CHROMA_MODE=local`      | Persists to`chrome_langchain_db/`. No external services needed.       |
+| **ChromaDB HTTP**  | `CHROMA_MODE=http`       | Connects to a remote Chroma server. Set`CHROMA_HOST`/`CHROMA_PORT`. |
+| **SAP HANA Cloud** | `VECTOR_DB_BACKEND=hana` | Requires`hdbcli` and `langchain-hana`. Set `HANA_DB_*` vars.      |
 
 ## License
 

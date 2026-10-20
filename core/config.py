@@ -249,6 +249,7 @@ class Settings:
 
     retriever_k: int = _env_int("RETRIEVER_K", 5)
     retriever_k_per_source: int = _env_int("RETRIEVER_K_PER_SOURCE", 3)
+    retriever_max_file_chars: int = _env_int("RETRIEVER_MAX_FILE_CHARS", 12000)
     max_chat_history_messages: int = _env_int("MAX_CHAT_HISTORY_MESSAGES", 12)
     max_chat_history_content_chars: int = _env_int(
         "MAX_CHAT_HISTORY_CONTENT_CHARS",

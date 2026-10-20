@@ -242,42 +242,28 @@ def get_indexed_sources() -> List[str]:
 
 
 def normalize_search_tokens(text: str) -> List[str]:
+    # The chat-history labels are ignored so follow-up queries (which embed
+    # "User: ... Assistant: ... Current question: ...") don't pin user_guide.pdf.
     ignored_terms = {
-        "the",
-        "and",
         "file",
-        "files",
         "look",
         "into",
-        "who",
         "what",
         "where",
         "when",
-        "why",
-        "how",
-        "is",
-        "are",
+        "user",
+        "assistant",
+        "current",
+        "question",
     }
-    tokens = re.findall(r"[a-z0-9]+", text.lower())
-    return [token for token in tokens if len(token) >= 3 and token not in ignored_terms]
-
-
-def get_documents_matching_source_name(query: str) -> List[Document]:
-    query_tokens = normalize_search_tokens(query)
-    if not query_tokens:
-        return []
-
-    matched_documents = []
-    for document in documents:
-        source = document.metadata.get("source", "").lower()
-        if any(token in source for token in query_tokens):
-            matched_documents.append(document)
-
-    return matched_documents
-
-
-def normalize_source_name(source: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", source.lower())
+    # Drop one trailing "s" before the length check, so "internships" matches
+    # "Internship.xlsx" but "this" doesn't become "thi"; 3-letter words like
+    # "you" or "for" matched filenames by accident.
+    tokens = [
+        token[:-1] if token.endswith("s") else token
+        for token in re.findall(r"[a-z0-9]+", text.lower())
+    ]
+    return [token for token in tokens if len(token) >= 4 and token not in ignored_terms]
 
 
 def get_sources_matching_query(query: str) -> List[str]:
@@ -285,10 +271,12 @@ def get_sources_matching_query(query: str) -> List[str]:
     if not query_tokens:
         return []
 
+    # Match the start of whole filename words (extension excluded), not any
+    # substring of the name: "you" used to match "layout.pptx", "pdf" every PDF.
     matched_sources = []
     for source in get_indexed_sources():
-        normalized_source = normalize_source_name(source)
-        if any(token in normalized_source for token in query_tokens):
+        source_words = re.findall(r"[a-z0-9]+", Path(source).stem.lower())
+        if any(word.startswith(token) for word in source_words for token in query_tokens):
             matched_sources.append(source)
 
     return matched_sources
@@ -298,46 +286,27 @@ def retrieve_from_all_sources(query: str) -> List[Document]:
     if not documents:
         return []
 
-    retrieved_documents = []
-    seen_ids = set()
     matched_sources = get_sources_matching_query(query)
+    if not matched_sources:
+        return vector_store.similarity_search(query, k=settings.retriever_k)
 
-    for document in get_documents_matching_source_name(query):
-        document_key = (
-            document.metadata.get("source"),
-            document.metadata.get("sheet"),
-            document.metadata.get("row"),
-            document.metadata.get("page"),
-            document.metadata.get("slide"),
-            document.page_content,
+    # Small named files go in whole so filtered questions ("which internships
+    # are remote?") see every row; the character budget keeps the prompt bounded.
+    named_documents = [
+        document for document in documents if document.metadata.get("source") in matched_sources
+    ]
+    if sum(len(document.page_content) for document in named_documents) <= settings.retriever_max_file_chars:
+        return named_documents
+
+    # ponytail: one search per named file keeps comparisons between files fair;
+    # many named files means many searches.
+    return [
+        document
+        for source in matched_sources
+        for document in vector_store.similarity_search(
+            query, k=settings.retriever_k_per_source, filter={"source": source}
         )
-        seen_ids.add(document_key)
-        retrieved_documents.append(document)
-
-    target_sources = matched_sources if matched_sources else get_indexed_sources()
-    for source in target_sources:
-        source_documents = vector_store.similarity_search(
-            query,
-            k=settings.retriever_k_per_source,
-            filter={"source": source},
-        )
-
-        for document in source_documents:
-            document_key = (
-                document.metadata.get("source"),
-                document.metadata.get("sheet"),
-                document.metadata.get("row"),
-                document.metadata.get("page"),
-                document.metadata.get("slide"),
-                document.page_content,
-            )
-            if document_key in seen_ids:
-                continue
-
-            seen_ids.add(document_key)
-            retrieved_documents.append(document)
-
-    return retrieved_documents
+    ]
 
 
 initialize_on_startup()

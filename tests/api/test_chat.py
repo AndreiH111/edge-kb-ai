@@ -7,6 +7,8 @@ them via attribute access, so patching the module attribute takes effect.
 
 import json
 
+import pytest
+
 from services import agent_service
 
 
@@ -122,6 +124,40 @@ class TestChat:
         resp = client.post("/ai/chat", json={"question": ""})
 
         assert resp.status_code == 422
+
+
+class TestListEverythingShortcut:
+    """Drives the real ``aanswer_question`` (no agent) to check which questions
+    skip the LLM and dump every record (``format_all_records``: "Found N ...")."""
+
+    @pytest.mark.parametrize(
+        "question, dumps",
+        [
+            ("List all records", True),
+            ("Show me every row", True),
+            ("What are all the internships?", True),
+            ("What data is available?", True),
+            ("list all intenships", True),
+            ("What is the overall total in the sales sheet?", False),
+            ("Which department grows fastest? Really curious", False),
+            ("Summarize the full PDF please", False),
+            ("List all documents", False),
+            ("Show me all records where status is Open", False),
+            ("List all Jira issues about data migration", False),
+            ("Print the full row for ID 42", False),
+        ],
+    )
+    def test_only_pure_list_requests_dump(self, client, monkeypatch, question, dumps):
+        # Imported here, after ``client`` injected the fake embed_service: a
+        # top-level import would load the real one.
+        from services import rag_service
+
+        monkeypatch.setattr(agent_service, "_agent", None)
+        monkeypatch.setattr(rag_service, "answer_question", lambda q, s: "NORMAL ANSWER")
+        resp = client.post("/ai/chat", json={"question": question})
+
+        assert resp.status_code == 200
+        assert resp.json()["answer"].startswith("Found ") is dumps
 
 
 class TestChatStream:
