@@ -55,3 +55,7 @@ dist/
 
 # Render/local deployment artifacts
 .render/
+
+# Claude Code personal settings and generated knowledge graph (keep local)
+.claude/settings.local.json
+graphify-out/

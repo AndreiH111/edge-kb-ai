@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(venv\\Scripts\\python.exe -m pytest*)",
+      "Bash(venv\\Scripts\\python.exe -m pylint*)",
+      "Bash(venv\\Scripts\\python.exe -m unittest*)",
+      "Bash(venv/Scripts/python.exe -m pytest*)",
+      "Bash(venv/Scripts/python.exe -m pylint*)",
+      "Bash(venv/Scripts/python.exe -m unittest*)",
+      "Bash(venv/bin/python -m pytest*)",
+      "Bash(venv/bin/python -m pylint*)",
+      "Bash(venv/bin/python -m unittest*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./data/**)",
+      "Read(./.storage_cache/**)"
+    ]
+  }
+}
