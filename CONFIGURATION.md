@@ -91,12 +91,13 @@ Set `EMBEDDING_MODE=local` for Ollama, `EMBEDDING_MODE=custom` for built-in hash
 
 Controls how parsed documents are split into smaller pieces before embedding.
 
-If `CHUNKING_MODE` is not set, it inherits from `LLM_MODE`. When set to `hosted`, the app uses an LLM to perform semantic chunking (splitting by meaning). When `local`, documents pass through a rule-based splitter.
+If `CHUNKING_MODE` is not set, it inherits from `LLM_MODE`. When set to `hosted`, the app uses an LLM to perform semantic chunking (splitting by meaning). When `local`, no LLM is used: Excel rows pass through unsplit, and PDF pages / slides longer than `LOCAL_CHUNK_SIZE` characters are split by a rule-based `RecursiveCharacterTextSplitter` (ids become `{source}:...:chunk:{n}`, every chunk carries `chunk_index`, `0` for an unsplit document).
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `CHUNKING_MODE` | value of `LLM_MODE` | `local` or `hosted` |
-| `OLLAMA_CHUNKING_MODEL` | value of `OLLAMA_LLM_MODEL` | Ollama model for local chunking |
+| `LOCAL_CHUNK_SIZE` | `1500` | Local mode: max characters per PDF/PPT chunk before splitting; `0` disables splitting (pure passthrough). Chunk ids depend on it, so run `POST /ai/reindex` once after upgrading or changing it (startup skips reindexing a non-empty store) |
+| `OLLAMA_CHUNKING_MODEL` | value of `OLLAMA_LLM_MODEL` | Reserved; local chunking currently calls no LLM |
 | `HOSTED_CHUNKING_PROVIDER` | `openai` | `openai` or `groq` |
 | `HOSTED_CHUNKING_MODEL` | `gpt-4o-mini` | Hosted model for semantic chunking |
 | `HOSTED_CHUNKING_API_KEY` | — | API key (falls back to `OPENAI_API_KEY`) |

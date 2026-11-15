@@ -217,6 +217,7 @@ class Settings:
         "HOSTED_LLM_CHUNKING_MAX_TOKENS",
         default=2048,
     )
+    local_chunk_size: int = _env_int("LOCAL_CHUNK_SIZE", 1500)
 
     embedding_mode: str = _env_embedding_mode()
     ollama_embedding_model: str = os.getenv(
