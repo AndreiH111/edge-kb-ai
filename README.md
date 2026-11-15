@@ -6,7 +6,7 @@ A FastAPI-based retrieval-augmented generation (RAG) application. Upload documen
 
 ## Features
 
-- **Multi-format parsing** — Excel (.xlsx/.xls/.xlsm), PDF, PowerPoint (.pptx/.pptm)
+- **Multi-format parsing** — Excel (.xlsx/.xls/.xlsm), PDF, PowerPoint (.pptx/.pptm); PDF and PowerPoint go through [Docling](https://github.com/docling-project/docling) (tables as Markdown, OCR for scans; models download on first conversion — see [CONFIGURATION.md](CONFIGURATION.md#document-parsing))
 - **Semantic chunking** — LLM-powered document splitting by meaning (with rule-based fallback)
 - **Excel classification** — Automatically detects structured vs. unstructured spreadsheets
 - **Async processing** — Background job queue for uploads and reindexing
@@ -244,13 +244,12 @@ python-rag-learning/
 │   ├── agent_service.py     # Agentic chat: tool-calling agent, MCP/Jira, streaming
 │   ├── chunking_service.py  # Semantic + rule-based document chunking
 │   ├── classifier_service.py # Excel sheet structure classification
+│   ├── document_service.py  # PDF/PowerPoint parsing (Docling)
 │   ├── embed_service.py     # Vector store management and retrieval
 │   ├── excel_service.py     # Excel file parsing
 │   ├── file_service.py      # File storage helpers
 │   ├── hash_embedding_service.py # Deterministic hash embeddings
 │   ├── job_queue.py         # Background job processing
-│   ├── pdf_service.py       # PDF parsing
-│   ├── ppt_service.py       # PowerPoint parsing
 │   ├── rag_service.py       # LLM chain and chat sessions
 │   ├── storage_service.py   # Local and S3 storage backends
 │   └── vectorstore_service.py # ChromaDB and HANA backends

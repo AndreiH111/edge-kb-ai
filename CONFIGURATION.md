@@ -87,6 +87,16 @@ Set `EMBEDDING_MODE=local` for Ollama, `EMBEDDING_MODE=custom` for built-in hash
 
 ---
 
+## Document Parsing
+
+PDF and PowerPoint (`.pptx`/`.pptm`) files are converted with [Docling](https://github.com/docling-project/docling): layout-aware text, tables rendered as Markdown, and OCR for scanned pages. Each page/slide becomes one document. Excel rows are read with pandas, one document per row. There are no settings for this.
+
+> **First run downloads models:** Docling fetches its layout/table models (a few hundred MB) on the first PDF/PowerPoint conversion, so that upload is slow and needs network. Prefetch them with `docling-tools models download`. Docling pulls in PyTorch; on CPU-only machines install it with `pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu`.
+
+> **Upgrading from the pypdf/python-pptx parser:** existing vectors keep the old text. Run `POST /ai/reindex` once so the store matches what Docling now extracts. Startup re-parses every stored PDF/PowerPoint to rebuild the in-memory corpus, so with many files it is noticeably slower than before. A file that fails to convert is skipped with a log line.
+
+---
+
 ## Chunking
 
 Controls how parsed documents are split into smaller pieces before embedding.
@@ -104,6 +114,8 @@ If `CHUNKING_MODE` is not set, it inherits from `LLM_MODE`. When set to `hosted`
 | `HOSTED_CHUNKING_TEMPERATURE` | `1` | Sampling temperature |
 | `HOSTED_CHUNKING_TOP_P` | `1` | Top-p sampling |
 | `HOSTED_CHUNKING_MAX_TOKENS` | `2048` | Max tokens for chunking responses |
+
+> **Excel in hosted mode:** Excel rows are tagged `file_type=excel`, so `CHUNKING_MODE=hosted` routes them through the sheet classifier (structured sheets stay one row per chunk; unstructured sheets are grouped and titled by the LLM).
 
 > **Fallback:** If the hosted chunking LLM is unreachable, a rule-based `RecursiveCharacterTextSplitter` is used automatically.
 

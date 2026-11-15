@@ -5,8 +5,7 @@ from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
-from core.config import settings
-from services.file_service import get_supported_files
+from services.excel_service import get_excel_files
 
 
 @dataclass(frozen=True)
@@ -20,14 +19,6 @@ class SheetClassification:
 CellGrid = List[List[Any]]
 StyleGrid = List[List[Optional[int]]]
 MergedRangeList = List[Tuple[int, int, int, int]]
-
-
-def get_excel_files() -> List[Path]:
-    return sorted(
-        path
-        for path in get_supported_files()
-        if path.suffix.lower() in settings.supported_excel_extensions and path.is_file()
-    )
 
 
 def classify_excel_files() -> List[SheetClassification]:
