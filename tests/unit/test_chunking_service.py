@@ -391,16 +391,46 @@ class TestChunkDocuments(unittest.TestCase):
         )
 
     @patch("services.chunking_service.settings")
-    def test_local_mode_returns_unchanged(self, mock_settings):
+    def test_local_mode_size_zero_returns_unchanged(self, mock_settings):
         mock_settings.use_local_chunking = True
+        mock_settings.local_chunk_size = 0
 
-        docs = [self._make_pdf_doc()]
+        docs = [self._make_pdf_doc("x " * 2000)]
         ids = ["f.pdf:page:1"]
 
         result_docs, result_ids = chunk_documents(docs, ids)
 
         self.assertEqual(result_docs, docs)
         self.assertEqual(result_ids, ids)
+
+    @patch("services.chunking_service.settings")
+    def test_local_mode_splits_long_pdf_and_stamps_chunk_index(self, mock_settings):
+        mock_settings.use_local_chunking = True
+        mock_settings.local_chunk_size = 200
+        long_text = "This is a sentence about the topic. " * 30
+        excel = Document(
+            page_content=long_text,
+            metadata={"source": "s.xlsx", "sheet": "S", "row": 2},
+            id="s.xlsx:S:2",
+        )
+        docs = [self._make_pdf_doc(), self._make_pdf_doc(long_text, "f.pdf:page:2"), excel]
+
+        result_docs, result_ids = chunk_documents(docs, [d.id for d in docs])
+
+        self.assertEqual(result_ids, [d.id for d in result_docs])
+        # Short PDF page and Excel row (however long) pass through with chunk_index 0.
+        self.assertEqual((result_docs[0].id, result_docs[0].metadata["chunk_index"]),
+                         ("f.pdf:page:1", 0))
+        self.assertEqual((result_docs[-1].id, result_docs[-1].page_content),
+                         ("s.xlsx:S:2", long_text))
+        self.assertEqual(result_docs[-1].metadata["chunk_index"], 0)
+        split = result_docs[1:-1]
+        self.assertGreater(len(split), 1)
+        for i, chunk in enumerate(split, start=1):
+            self.assertEqual(chunk.id, f"f.pdf:page:2:chunk:{i}")
+            self.assertEqual(chunk.metadata["chunk_index"], i)
+            self.assertEqual(chunk.metadata["source"], "f.pdf")
+            self.assertLessEqual(len(chunk.page_content), 200)
 
     @patch("services.chunking_service.settings")
     @patch("services.chunking_service.create_chunking_llm")

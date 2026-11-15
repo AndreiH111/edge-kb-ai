@@ -1,7 +1,8 @@
 """Agentic semantic chunking service.
 
 When CHUNKING_MODE=hosted, documents are split into meaning-based chunks using an
-LLM. When CHUNKING_MODE=local, documents pass through unchanged (current behavior).
+LLM. When CHUNKING_MODE=local, no LLM is used: PDF/PPT docs longer than
+LOCAL_CHUNK_SIZE are size-split and Excel rows pass through.
 
 If the hosted LLM is unreachable, a rule-based RecursiveCharacterTextSplitter is
 used as a fallback.
@@ -105,14 +106,9 @@ def is_chunking_llm_available(llm=None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-_fallback_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=FALLBACK_CHUNK_SIZE,
-    chunk_overlap=FALLBACK_CHUNK_OVERLAP,
-    separators=FALLBACK_SEPARATORS,
-)
-
-
-def fallback_chunk_document(document: Document) -> List[Document]:
+def fallback_chunk_document(
+    document: Document, chunk_size: int = FALLBACK_CHUNK_SIZE
+) -> List[Document]:
     """Split a document using RecursiveCharacterTextSplitter as a fallback.
 
     If the content is shorter than chunk_size, return it as a single chunk.
@@ -121,7 +117,7 @@ def fallback_chunk_document(document: Document) -> List[Document]:
     original_id = document.id or ""
     content = document.page_content
 
-    if len(content) <= FALLBACK_CHUNK_SIZE:
+    if len(content) <= chunk_size:
         return [
             Document(
                 page_content=content,
@@ -130,7 +126,13 @@ def fallback_chunk_document(document: Document) -> List[Document]:
             )
         ]
 
-    texts = _fallback_splitter.split_text(content)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        # Keep the default 512/80 ratio (~15% overlap) for any size.
+        chunk_overlap=chunk_size * FALLBACK_CHUNK_OVERLAP // FALLBACK_CHUNK_SIZE,
+        separators=FALLBACK_SEPARATORS,
+    )
+    texts = splitter.split_text(content)
 
     chunks = []
     for index, text in enumerate(texts, start=1):
@@ -477,12 +479,40 @@ def semantic_chunk_excel_documents(
 # ---------------------------------------------------------------------------
 
 
+def _local_chunk_documents(
+    documents: List[Document], ids: List[str]
+) -> Tuple[List[Document], List[str]]:
+    """Local mode: size-split long PDF/PPT docs, stamp chunk_index on all."""
+    limit = settings.local_chunk_size
+    if limit <= 0:
+        return documents, ids
+
+    chunked: List[Document] = []
+    for doc in documents:
+        # shortcut: Excel rows are detected by a "row" key until every loader stamps file_type.
+        is_excel = doc.metadata.get("file_type") == "excel" or "row" in doc.metadata
+        if is_excel or len(doc.page_content) <= limit:
+            chunked.append(
+                Document(
+                    page_content=doc.page_content,
+                    metadata={**doc.metadata, "chunk_index": 0},
+                    id=doc.id,
+                )
+            )
+        else:
+            chunked.extend(fallback_chunk_document(doc, chunk_size=limit))
+    return chunked, [doc.id for doc in chunked]
+
+
 def chunk_documents(
     documents: List[Document], ids: List[str]
 ) -> Tuple[List[Document], List[str]]:
     """Chunk documents based on CHUNKING_MODE setting.
 
-    If CHUNKING_MODE=local: return documents and ids unchanged.
+    If CHUNKING_MODE=local: Excel rows pass through; PDF/PPT docs longer than
+      LOCAL_CHUNK_SIZE chars are split by the rule-based splitter. Every doc
+      gets a chunk_index (0 = unsplit). LOCAL_CHUNK_SIZE=0 returns the input
+      unchanged.
     If CHUNKING_MODE=hosted: use semantic chunking via LLM with fallback.
       - For Excel: uses classifier_service to determine structured vs unstructured.
         Structured sheets pass through as row-by-row. Unstructured sheets get
@@ -490,7 +520,7 @@ def chunk_documents(
       - For PDF/PPT: always uses semantic chunking (or fallback).
     """
     if settings.use_local_chunking:
-        return documents, ids
+        return _local_chunk_documents(documents, ids)
 
     # Hosted mode: attempt LLM-based semantic chunking
     llm = None
