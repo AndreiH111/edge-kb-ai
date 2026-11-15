@@ -13,15 +13,17 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from langchain.agents import create_agent
+from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
 
 from services import agent_service
 
 
 _MISSING = object()
+_MODEL_NODE = {"langgraph_node": "model"}
 
 
 def _collect(async_gen):
@@ -118,8 +120,12 @@ def make_fake_rag(
     module.format_context = lambda documents: "\n\n".join(
         getattr(doc, "page_content", str(doc)) for doc in documents
     )
+    module.get_history = lambda session_id: module.chat_sessions.setdefault(
+        session_id, InMemoryChatMessageHistory()
+    )
+    module.recent_messages = lambda history: list(history.messages)
     module.format_chat_history = lambda history: (
-        "No previous messages in this session." if not history else "HISTORY"
+        "No previous messages in this session." if not history.messages else "HISTORY"
     )
     module.answer_question = lambda question, session_id: answer
     module.create_llm = lambda: (
@@ -129,12 +135,7 @@ def make_fake_rag(
     )
 
     def add_chat_history(history, question, answer_text):
-        history.extend(
-            [
-                {"role": "user", "content": question},
-                {"role": "assistant", "content": answer_text},
-            ]
-        )
+        history.add_messages([HumanMessage(question), AIMessage(answer_text)])
 
     module.add_chat_history = add_chat_history
 
@@ -225,7 +226,7 @@ class FakeAgent:
 class FakeStreamingAgent:
     """Stands in for a compiled agent; yields scripted ``(mode, data)`` tuples.
 
-    A real ``create_react_agent`` cannot be driven by ``GenericFakeChatModel``
+    A real ``create_agent`` cannot be driven by ``GenericFakeChatModel``
     under ``stream_mode="messages"`` (it raises "No generations found in stream"),
     so streaming is exercised by scripting the agent's ``astream`` directly — the
     same approach ``FakeAgent`` takes for ``ainvoke``.
@@ -275,7 +276,7 @@ class AgentInvocationTests(unittest.TestCase):
                 ]
             )
         )
-        agent = create_react_agent(model, [echo_tool], prompt=agent_service.SYSTEM_PROMPT)
+        agent = create_agent(model, [echo_tool], system_prompt=agent_service.SYSTEM_PROMPT)
         self._use_agent(agent)
 
         fake_rag = make_fake_rag()
@@ -286,11 +287,8 @@ class AgentInvocationTests(unittest.TestCase):
         self.assertEqual(result.answer, "Final answer using ECHO:hello")
         self.assertEqual(result.tools_used, ["echo_tool"])
         self.assertEqual(
-            fake_rag.chat_sessions["s1"],
-            [
-                {"role": "user", "content": "please echo"},
-                {"role": "assistant", "content": "Final answer using ECHO:hello"},
-            ],
+            fake_rag.chat_sessions["s1"].messages,
+            [HumanMessage("please echo"), AIMessage("Final answer using ECHO:hello")],
         )
 
     def test_fallback_to_legacy_when_agent_raises(self):
@@ -645,8 +643,8 @@ class AgentStreamingTests(unittest.TestCase):
                     }
                 },
             ),
-            ("messages", (AIMessageChunk(content="Hello "), {})),
-            ("messages", (AIMessageChunk(content="world"), {})),
+            ("messages", (AIMessageChunk(content="Hello "), _MODEL_NODE)),
+            ("messages", (AIMessageChunk(content="world"), _MODEL_NODE)),
         ]
         agent = FakeStreamingAgent(events)
         self._use_agent(agent)
@@ -666,10 +664,30 @@ class AgentStreamingTests(unittest.TestCase):
         self.assertEqual(done["answer"], "Hello world")
         self.assertEqual(done["tools_used"], ["search_knowledge_base"])
         self.assertEqual(
-            fake_rag.chat_sessions["s1"],
+            fake_rag.chat_sessions["s1"].messages,
+            [HumanMessage("q"), AIMessage("Hello world")],
+        )
+
+    def test_astream_answer_skips_tool_node_chunks(self):
+        """LLM chunks emitted inside a tool (``langgraph_node == "tools"``) are
+        not forwarded; only the agent's ``model`` node reaches the client."""
+        self._use_agent(
+            FakeStreamingAgent(
+                [
+                    ("messages", (AIMessageChunk(content="LEAK"), {"langgraph_node": "tools"})),
+                    ("messages", (AIMessageChunk(content="answer"), _MODEL_NODE)),
+                ]
+            )
+        )
+
+        with inject_services(rag_service=make_fake_rag()):
+            result = _collect(agent_service.astream_answer("q", "s4"))
+
+        self.assertEqual(
+            result,
             [
-                {"role": "user", "content": "q"},
-                {"role": "assistant", "content": "Hello world"},
+                ("token", {"text": "answer"}),
+                ("done", {"session_id": "s4", "answer": "answer", "tools_used": []}),
             ],
         )
 
@@ -692,11 +710,8 @@ class AgentStreamingTests(unittest.TestCase):
         self.assertEqual(done["answer"], "LEGACY")
         self.assertEqual(done["tools_used"], [])
         self.assertEqual(
-            fake_rag.chat_sessions["s2"],
-            [
-                {"role": "user", "content": "q"},
-                {"role": "assistant", "content": "LEGACY"},
-            ],
+            fake_rag.chat_sessions["s2"].messages,
+            [HumanMessage("q"), AIMessage("LEGACY")],
         )
 
     def test_astream_answer_exhaustive_bypass(self):
