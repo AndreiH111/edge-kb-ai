@@ -120,6 +120,8 @@ Tuning parameters for the retrieval pipeline and chat session memory.
 | `RETRIEVER_K` | `5` | Documents retrieved per query when the question doesn't name a file (one search across all files) |
 | `RETRIEVER_MAX_FILE_CHARS` | `12000` | When the question names file(s) whose combined text is at most this many characters, the whole file(s) are sent to the LLM (complete answers for small spreadsheets). Lower it for low token-rate tiers |
 | `RETRIEVER_K_PER_SOURCE` | `3` | Documents retrieved from each named file when the named files are too large to send whole |
+| `HYBRID_SEARCH_ENABLED` | `true` | Fuse a stdlib BM25 lexical ranking of the in-memory corpus with the vector search (reciprocal rank fusion) so exact codes and rare words rank first. `false` restores pure vector search |
+| `HYBRID_CANDIDATES` | `20` | Candidates fetched from each of BM25 and the vector store before fusion; the top `RETRIEVER_K` / `RETRIEVER_K_PER_SOURCE` of the fused list are returned |
 | `MAX_CHAT_HISTORY_MESSAGES` | `12` | Messages retained per chat session |
 | `MAX_CHAT_HISTORY_CONTENT_CHARS` | `2000` | Max characters kept per history message |
 
