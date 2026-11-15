@@ -18,6 +18,7 @@ A FastAPI-based retrieval-augmented generation (RAG) application. Upload documen
 - **History-aware retrieval** — Follow-ups are rewritten into standalone search questions before retrieval, with optional multi-query expansion (`QUERY_REWRITE_ENABLED`, `MULTI_QUERY_COUNT`)
 - **Source-aware retrieval** — Retrieves relevant context across all indexed files
 - **Hybrid search** — BM25 lexical ranking fused with vector similarity (reciprocal rank fusion), so exact identifiers and rare terms are not lost to embeddings
+- **Self-corrective retrieval** — The agent's knowledge-base search is a LangGraph graph: an LLM grades the passages, rewrites the query and retries when nothing is relevant, then reranks the results (`RAG_*` settings)
 - **Agentic chat** — The LLM decides which tools to call (search the knowledge base, or query Jira read-only via an MCP server) instead of a fixed retrieve-then-answer flow, with automatic fallback to the classic RAG chain
 - **Streaming (SSE)** — `POST /ai/chat/stream` streams replies token-by-token as Server-Sent Events (`tool`, `token`, `done`, `error`)
 
@@ -252,6 +253,7 @@ python-rag-learning/
 │   ├── file_service.py      # File storage helpers
 │   ├── hash_embedding_service.py # Deterministic hash embeddings
 │   ├── job_queue.py         # Background job processing
+│   ├── rag_graph.py         # Self-corrective retrieval graph (grade, rewrite, rerank)
 │   ├── rag_service.py       # LLM chain and chat sessions
 │   ├── storage_service.py   # Local and S3 storage backends
 │   └── vectorstore_service.py # ChromaDB and HANA backends

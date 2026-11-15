@@ -157,6 +157,13 @@ def make_fake_embed(*, docs=None, sources=None):
     return module
 
 
+def make_fake_rag_graph(*, docs=None) -> types.ModuleType:
+    """Build a stand-in for ``services.rag_graph``."""
+    module = types.ModuleType("services.rag_graph")
+    module.retrieve = lambda question: list(docs or [])
+    return module
+
+
 def make_fake_mcp_adapters(*, tools=None, load_error=None):
     """Build fake ``langchain_mcp_adapters`` ``.client`` / ``.tools`` modules.
 
@@ -336,7 +343,7 @@ class KnowledgeBaseToolTests(unittest.TestCase):
     def test_search_returns_formatted_context(self):
         docs = [SimpleNamespace(page_content="internship at ACME")]
         with inject_services(
-            embed_service=make_fake_embed(docs=docs),
+            rag_graph=make_fake_rag_graph(docs=docs),
             rag_service=make_fake_rag(),
         ):
             result = agent_service.search_knowledge_base.invoke({"query": "internships"})
@@ -345,7 +352,7 @@ class KnowledgeBaseToolTests(unittest.TestCase):
 
     def test_search_returns_message_when_no_docs(self):
         with inject_services(
-            embed_service=make_fake_embed(docs=[]),
+            rag_graph=make_fake_rag_graph(docs=[]),
             rag_service=make_fake_rag(),
         ):
             result = agent_service.search_knowledge_base.invoke({"query": "nothing"})

@@ -270,6 +270,10 @@ class Settings:
     )
     query_rewrite_enabled: bool = _env_bool("QUERY_REWRITE_ENABLED", True)
     multi_query_count: int = _env_int("MULTI_QUERY_COUNT", 1)
+    rag_grading_enabled: bool = _env_bool("RAG_GRADING_ENABLED", True)
+    rag_max_retries: int = _env_int("RAG_MAX_RETRIES", 1)
+    rag_rerank_enabled: bool = _env_bool("RAG_RERANK_ENABLED", True)
+    rag_rerank_top_n: int = _env_int("RAG_RERANK_TOP_N", 5)
 
     # ---- Agentic chat + Jira via MCP ----
     agent_enabled: bool = _env_bool("AGENT_ENABLED", True)

@@ -87,9 +87,9 @@ def search_knowledge_base(query: str) -> str:
     """Search the uploaded documents (Excel/PDF/PowerPoint) for information
     relevant to the query. Use this for any question about the knowledge base's
     contents. Returns the most relevant passages, or a message if none match."""
-    from services import embed_service, rag_service
+    from services import rag_graph, rag_service
 
-    documents = embed_service.retrieve_from_all_sources(query)
+    documents = rag_graph.retrieve(query)
     if not documents:
         return "No relevant context found in the knowledge base."
 
