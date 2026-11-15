@@ -10,7 +10,6 @@ The class is skipped unless the offline settings pinned by the root
 real ``.env``), and loads the module in ``setUpClass`` so a skip runs nothing.
 """
 
-import dataclasses
 import importlib.util
 import unittest
 from pathlib import Path
@@ -23,16 +22,21 @@ from core.config import settings
 EMBED_SERVICE_PATH = Path(__file__).resolve().parents[2] / "services" / "embed_service.py"
 
 
-def _doc(source: str, text: str = "content") -> Document:
-    return Document(page_content=text, metadata={"source": source})
-
-
-@unittest.skipUnless(
+# Shared with test_rag_format: these classes load real service code, so they run
+# only under conftest's offline settings (plain unittest reads the real .env).
+offline_only = unittest.skipUnless(
     settings.storage_backend == "local"
     and settings.use_custom_hash_embeddings
     and settings.use_local_chunking,
     "needs the offline settings pinned by conftest.py (run with pytest)",
 )
+
+
+def _doc(source: str, text: str = "content") -> Document:
+    return Document(page_content=text, metadata={"source": source})
+
+
+@offline_only
 class RetrieveFromAllSourcesTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -67,7 +71,7 @@ class RetrieveFromAllSourcesTests(unittest.TestCase):
 
     def test_large_named_file_is_searched_not_dumped(self) -> None:
         self.module.documents = [_doc("Internships_2024.xlsx", "x" * 50), _doc("handbook.pdf")]
-        tight = dataclasses.replace(self.module.settings, retriever_max_file_chars=10)
+        tight = self.module.settings.model_copy(update={"retriever_max_file_chars": 10})
 
         with patch.object(self.module, "settings", tight):
             self.module.retrieve_from_all_sources("Which internships are remote?")
@@ -95,7 +99,7 @@ class RetrieveFromAllSourcesTests(unittest.TestCase):
         doc_a, doc_b = _doc("a.pdf", "first"), _doc("b.pdf", "second")
         self.module.documents = [doc_b, _doc("c.pdf", "quokka")]
         self.store.similarity_search.return_value = [doc_a, doc_b]
-        classic = dataclasses.replace(self.module.settings, hybrid_search_enabled=False)
+        classic = self.module.settings.model_copy(update={"hybrid_search_enabled": False})
 
         with patch.object(self.module, "settings", classic):
             result = self.module.retrieve_from_all_sources("quokka")

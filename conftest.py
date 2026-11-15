@@ -12,9 +12,9 @@ import os
 import tempfile
 
 # Stop core.config from loading the real .env. core.config does
-# ``from dotenv import load_dotenv`` *inside* a function, so replacing the
-# attribute here — before core.config is imported — makes that call a no-op and
-# the working-tree .env is never read.
+# ``from dotenv import load_dotenv`` at import time, so replacing the attribute
+# here — before core.config is imported — makes that call a no-op and the
+# working-tree .env is never read.
 import dotenv
 
 dotenv.load_dotenv = lambda *args, **kwargs: None

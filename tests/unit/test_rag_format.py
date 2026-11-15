@@ -14,18 +14,13 @@ from pathlib import Path
 
 from langchain_core.documents import Document
 
-from core.config import settings
 from tests.unit.test_agent_service import inject_services
+from tests.unit.test_embed_service import offline_only
 
 RAG_SERVICE_PATH = Path(__file__).resolve().parents[2] / "services" / "rag_service.py"
 
 
-@unittest.skipUnless(
-    settings.storage_backend == "local"
-    and settings.use_custom_hash_embeddings
-    and settings.use_local_chunking,
-    "needs the offline settings pinned by conftest.py (run with pytest)",
-)
+@offline_only
 class FormatContextTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

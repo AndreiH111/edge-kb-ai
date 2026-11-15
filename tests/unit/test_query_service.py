@@ -5,7 +5,6 @@ tests pass scripted ``GenericFakeChatModel`` instances directly and inject a fak
 ``embed_service`` via ``inject_services`` — the real modules are never imported.
 """
 
-import dataclasses
 import unittest
 from unittest.mock import patch
 
@@ -28,7 +27,7 @@ class RaisingLLM:
 
 def with_settings(**overrides):
     return patch.object(
-        query_service, "settings", dataclasses.replace(query_service.settings, **overrides)
+        query_service, "settings", query_service.settings.model_copy(update=overrides)
     )
 
 
