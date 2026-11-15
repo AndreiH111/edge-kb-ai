@@ -120,6 +120,10 @@ Tuning parameters for the retrieval pipeline and chat session memory.
 | `RETRIEVER_K` | `5` | Documents retrieved per query when the question doesn't name a file (one search across all files) |
 | `RETRIEVER_MAX_FILE_CHARS` | `12000` | When the question names file(s) whose combined text is at most this many characters, the whole file(s) are sent to the LLM (complete answers for small spreadsheets). Lower it for low token-rate tiers |
 | `RETRIEVER_K_PER_SOURCE` | `3` | Documents retrieved from each named file when the named files are too large to send whole |
+| `RETRIEVER_SEARCH_TYPE` | `similarity` | `similarity` (nearest neighbours) or `mmr` (maximal marginal relevance: re-ranks the `RETRIEVER_MMR_FETCH_K` nearest chunks for diversity, which helps when a file has many near-duplicate rows) |
+| `RETRIEVER_MMR_FETCH_K` | `20` | Candidates fetched before MMR re-ranking (`mmr` only; never less than the requested `k`) |
+| `RETRIEVER_MMR_LAMBDA` | `0.5` | MMR relevance/diversity trade-off, `0` = max diversity, `1` = pure relevance (`mmr` only) |
+| `RETRIEVER_SCORE_THRESHOLD` | — | Unset = off. Keep only chunks whose relevance score is at least this value (`similarity` only). Chroma-only; see the Vector Store section before enabling |
 | `MAX_CHAT_HISTORY_MESSAGES` | `12` | Messages retained per chat session |
 | `MAX_CHAT_HISTORY_CONTENT_CHARS` | `2000` | Max characters kept per history message |
 
@@ -159,6 +163,11 @@ The chat is **agentic**: the LLM decides which tools to call instead of always r
 Controls where embeddings are persisted and searched.
 
 Set `VECTOR_DB_BACKEND=chroma` (default) for ChromaDB, or `VECTOR_DB_BACKEND=hana` for SAP HANA Cloud Vector Engine.
+
+The search options in *Retrieval & Chat History* (`RETRIEVER_SEARCH_TYPE`, `RETRIEVER_MMR_*`, `RETRIEVER_SCORE_THRESHOLD`) are applied inside the backend wrapper:
+
+- **Chroma** supports both `mmr` and `RETRIEVER_SCORE_THRESHOLD`. The collection uses Chroma's default `l2` distance, so relevance scores only fall in `[0, 1]` for unit-normalised embeddings (e.g. OpenAI); with other embeddings a fixed threshold is unreliable and LangChain logs a warning. `mmr` is safe with any embedding.
+- **HANA** supports `mmr` when the installed `langchain-hana` provides `max_marginal_relevance_search`; otherwise it logs one warning and falls back to plain similarity search. `RETRIEVER_SCORE_THRESHOLD` is ignored on HANA (same one-time warning).
 
 ### ChromaDB
 
