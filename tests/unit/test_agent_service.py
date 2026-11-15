@@ -122,6 +122,7 @@ def make_fake_rag(
         "No previous messages in this session." if not history else "HISTORY"
     )
     module.answer_question = lambda question, session_id: answer
+    module.model = None  # chat model passed to query_service on the legacy path
     module.create_llm = lambda: (
         llm
         if llm is not None

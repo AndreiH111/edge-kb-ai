@@ -403,24 +403,24 @@ async def astream_answer(
 async def _astream_legacy(
     question: str, session_id: str
 ) -> AsyncIterator[Tuple[str, dict]]:
-    """Stream the classic RAG chain token-by-token, without editing rag_service.
+    """Stream the classic RAG chain token-by-token.
 
-    Rebuilds the retrieval query exactly as ``rag_service.answer_question`` does,
-    runs the synchronous retrieval in a thread, then streams the LCEL chain. If
-    the chain stream itself fails, falls back to the fully synchronous
+    Retrieves through ``query_service`` exactly as ``rag_service.answer_question``
+    does (in a thread), then streams the LCEL chain. If the chain stream itself
+    fails, falls back to the fully synchronous
     ``answer_question`` (which persists its own turn) emitted as a single token.
     """
-    from services import embed_service, rag_service
+    from services import query_service, rag_service
 
     history = rag_service.chat_sessions.setdefault(session_id, [])
     chat_history = rag_service.format_chat_history(history)
-    retrieval_query = (
-        question if not history else f"{chat_history}\nCurrent question: {question}"
-    )
 
     try:
         context = await asyncio.to_thread(
-            embed_service.retrieve_from_all_sources, retrieval_query
+            query_service.build_retrieval_documents,
+            question,
+            chat_history,
+            rag_service.model,
         )
         parts: List[str] = []
         async for chunk in rag_service.chain.astream(
