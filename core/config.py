@@ -255,6 +255,10 @@ class Settings:
         "MAX_CHAT_HISTORY_CONTENT_CHARS",
         2000,
     )
+    rag_grading_enabled: bool = _env_bool("RAG_GRADING_ENABLED", True)
+    rag_max_retries: int = _env_int("RAG_MAX_RETRIES", 1)
+    rag_rerank_enabled: bool = _env_bool("RAG_RERANK_ENABLED", True)
+    rag_rerank_top_n: int = _env_int("RAG_RERANK_TOP_N", 5)
 
     # ---- Agentic chat + Jira via MCP ----
     agent_enabled: bool = _env_bool("AGENT_ENABLED", True)

@@ -16,6 +16,7 @@ A FastAPI-based retrieval-augmented generation (RAG) application. Upload documen
 - **Multiple storage backends** — Local filesystem or AWS S3
 - **Session-based chat** — Follow-up questions use conversation history
 - **Source-aware retrieval** — Retrieves relevant context across all indexed files
+- **Self-corrective retrieval** — The agent's knowledge-base search is a LangGraph graph: an LLM grades the passages, rewrites the query and retries when nothing is relevant, then reranks the results (`RAG_*` settings)
 - **Agentic chat** — The LLM decides which tools to call (search the knowledge base, or query Jira read-only via an MCP server) instead of a fixed retrieve-then-answer flow, with automatic fallback to the classic RAG chain
 - **Streaming (SSE)** — `POST /ai/chat/stream` streams replies token-by-token as Server-Sent Events (`tool`, `token`, `done`, `error`)
 
@@ -251,6 +252,7 @@ python-rag-learning/
 │   ├── job_queue.py         # Background job processing
 │   ├── pdf_service.py       # PDF parsing
 │   ├── ppt_service.py       # PowerPoint parsing
+│   ├── rag_graph.py         # Self-corrective retrieval graph (grade, rewrite, rerank)
 │   ├── rag_service.py       # LLM chain and chat sessions
 │   ├── storage_service.py   # Local and S3 storage backends
 │   └── vectorstore_service.py # ChromaDB and HANA backends
