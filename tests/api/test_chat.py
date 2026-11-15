@@ -6,8 +6,10 @@ them via attribute access, so patching the module attribute takes effect.
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
+from langchain_core.chat_history import InMemoryChatMessageHistory
 
 from services import agent_service
 
@@ -158,6 +160,25 @@ class TestListEverythingShortcut:
 
         assert resp.status_code == 200
         assert resp.json()["answer"].startswith("Found ") is dumps
+
+
+class TestChatHistory:
+    def test_history_trims_to_limit_starting_on_user(self, client, monkeypatch):
+        from services import rag_service  # after ``client`` injected the fake embed_service
+
+        monkeypatch.setattr(
+            rag_service,
+            "settings",
+            SimpleNamespace(max_chat_history_messages=3, max_chat_history_content_chars=100),
+        )
+        history = InMemoryChatMessageHistory()
+        assert rag_service.format_chat_history(history) == "No previous messages in this session."
+
+        rag_service.add_chat_history(history, "q1", "a1")
+        rag_service.add_chat_history(history, "q2", "a2")
+
+        # Last 3 would be [a1, q2, a2]; start_on="human" drops the leading AI turn.
+        assert rag_service.format_chat_history(history) == "User: q2\nAssistant: a2"
 
 
 class TestChatStream:

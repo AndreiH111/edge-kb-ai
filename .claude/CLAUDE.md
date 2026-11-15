@@ -47,14 +47,14 @@ Thin routers over service modules. All routes are prefixed `/ai`.
 
 - `main.py` — FastAPI app + lifespan (starts the job queue, opens the agent/MCP session). Also a `__main__` CLI loop that calls the legacy sync path.
 - `api/routes/` — `chat.py` (`/ai/chat`, `/ai/chat/stream` SSE, `/ai/agent-status`), `upload.py`, `files.py`, `delete.py`, `jobs.py`.
-- `core/config.py` — every setting as a frozen `Settings` dataclass read from env/`.env`. Add new config here via the `_env_*` helpers.
+- `core/config.py` — every setting as a field on a frozen pydantic-settings `Settings` (`BaseSettings`) read from env/`.env`.
 - `models/schemas.py` — Pydantic request/response models.
 - `services/` — key modules:
-  - `agent_service.py` — the agentic core: LangGraph `create_react_agent`, KB tools, Jira MCP loading, SSE streaming (`astream_answer`), and `AgentStatus`.
-  - `rag_service.py` — the classic LCEL chain, `create_llm()`, in-memory `chat_sessions`, and the exhaustive-dump fast path. This is the agent's fallback.
+  - `agent_service.py` — the agentic core: LangGraph agent built with `langchain.agents.create_agent`, KB tools, Jira MCP loading, SSE streaming (`astream_answer`), and `AgentStatus`.
+  - `rag_service.py` — the classic LCEL chain, `create_llm()` (LLMs are built with `init_chat_model`; `chunking_service.create_chunking_llm()` likewise), in-memory `chat_sessions` (`InMemoryChatMessageHistory` per session via `get_history`, trimmed by `recent_messages`), and the exhaustive-dump fast path. This is the agent's fallback.
   - `embed_service.py` — vector store + `retrieve_from_all_sources`. **Importing it runs `initialize_on_startup()`** (vector store + S3 sync) — heavy; keep it out of unit tests.
   - `vectorstore_service.py` (Chroma / SAP HANA), `storage_service.py` (local / S3), `job_queue.py` (async upload/reindex).
-  - Parsing & chunking: `excel_service.py`, `pdf_service.py`, `ppt_service.py`, `chunking_service.py`, `classifier_service.py`.
+  - Parsing & chunking: `excel_service.py` (pandas rows), `document_service.py` (PDF/PPTX via Docling), `chunking_service.py`, `classifier_service.py`.
   - Support: `file_service.py`, `metadata_service.py`, `hash_embedding_service.py`.
 
 ## Conventions
@@ -66,7 +66,7 @@ Thin routers over service modules. All routes are prefixed `/ai`.
   venv\Scripts\python.exe -m pylint api core models services tests main.py conftest.py   # must stay 10.00/10
   ```
   If either fails, fix it (or, for a justified lint case, disable the specific check in `.pylintrc` with an inline rationale) — never leave the tree red or claim done on unrun checks.
-- **Config:** don't read `os.getenv` outside `core/config.py`; add a field to `Settings` and reference `settings.<field>`.
+- **Config:** don't read `os.getenv` outside `core/config.py`; reference `settings.<field>`. To add a setting, add one line to `Settings` named as the env var lowercased (`chroma_port: int = 8000` reads `CHROMA_PORT`); legacy names go in `Field(default, validation_alias=AliasChoices("NEW", "OLD"))`. Document it in `CONFIGURATION.md` and `.env.example`. In tests, derive variants with `settings.model_copy(update={...})` (the model is frozen; `model_copy` skips validation, so pass final normalised values).
 - **Lazy imports:** `agent_service` imports `rag_service`/`embed_service` *inside functions* so the module stays cheap to import (tests depend on this). Follow that pattern for heavy deps.
 - **Tests:** two layers, both offline. `tests/unit/` — service `unittest` tests; fakes injected via `sys.modules` (`inject_services` / `inject_modules` in `tests/unit/test_agent_service.py`), the agent driven by fake tool-calling models or a scripted `astream`. `tests/api/` — pytest + `TestClient` endpoint tests; the root `conftest.py` neutralizes `.env` and pins offline settings, and `tests/api/conftest.py` injects a fake `embed_service` before importing `main` (so the import stays cheap) and drives scenarios with `monkeypatch`. Never import real services (especially `embed_service`) into a test. The one sanctioned exception is `tests/unit/test_embed_service.py`: it runs `embed_service`'s code under a private module name with `build_vector_store` patched, loads it in `setUpClass`, and is skipped unless conftest's offline settings are active. Copy that pattern if you need to test `embed_service` logic.
 - **Style:** 4-space indent, type hints and short docstrings on new functions; match the surrounding module.
@@ -112,8 +112,8 @@ Not lazy about: understanding the problem; input validation at trust boundaries;
 - **`GET /ai/agent-status` is the source of truth** for whether the agent and Jira tools loaded (`jira_loaded`, `tools`, `jira_error`). Failures degrade silently to a retrieval-only or legacy answer.
 - **Jira MCP over stdio spawns `JIRA_MCP_COMMAND` via PATH.** On Windows set it to the absolute `...\venv\Scripts\mcp-atlassian.exe`, or launch uvicorn from the activated venv.
 - **Too many tool schemas can exceed the LLM's token/rate limit.** Binding all ~38 Jira tools adds thousands of tokens per request; on low tiers (e.g. Groq's 8000 TPM) this returns `413`, the agent throws, and it falls back to the legacy chain ("I don't have that information"). Restrict `JIRA_ENABLED_TOOLS` to a few tools.
+- **Docling must stay a lazy import.** `document_service._converter()` imports it on first use: the import pulls torch and the first PDF/PPTX conversion downloads layout models (prefetch with `docling-tools models download`). Tests inject a fake `docling` via `sys.modules`; never import the real one in a test.
 - **`.env` changes require a full server restart** — `--reload` only watches `.py` files.
-- `langgraph.prebuilt.create_react_agent` is deprecated (moved to `langchain.agents`) but intentionally kept under the pinned `langgraph<2`.
 
 ## Reference
 

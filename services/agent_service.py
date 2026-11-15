@@ -16,14 +16,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import AsyncIterator, List, Optional, Tuple
 
-from langchain_core.messages import (
-    AIMessage,
-    AIMessageChunk,
-    BaseMessage,
-    HumanMessage,
-)
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
 
 from core.config import settings
 
@@ -48,7 +43,7 @@ How to decide:
 - Any question about the uploaded documents or knowledge base -> call `search_knowledge_base` first.
 - Only answer once a tool has returned. If a tool returns nothing useful, say so plainly instead of inventing an answer.
 - Use the conversation history to resolve follow-up questions and references to earlier messages.
-- Answer clearly and concisely, and mention the source file or the Jira tool the information came from.
+- Answer clearly and concisely. Cite the knowledge-base passages you used as [n] (as numbered in that search result) together with their file name, or name the Jira tool the information came from; do not cite passages you did not use.
 """
 
 
@@ -92,9 +87,9 @@ def search_knowledge_base(query: str) -> str:
     """Search the uploaded documents (Excel/PDF/PowerPoint) for information
     relevant to the query. Use this for any question about the knowledge base's
     contents. Returns the most relevant passages, or a message if none match."""
-    from services import embed_service, rag_service
+    from services import rag_graph, rag_service
 
-    documents = embed_service.retrieve_from_all_sources(query)
+    documents = rag_graph.retrieve(query)
     if not documents:
         return "No relevant context found in the knowledge base."
 
@@ -207,8 +202,8 @@ async def lifespan_agent():
                 )
 
         try:
-            _agent = create_react_agent(
-                rag_service.create_llm(), tools, prompt=SYSTEM_PROMPT
+            _agent = create_agent(
+                rag_service.create_llm(), tools, system_prompt=SYSTEM_PROMPT
             )
             logger.info("Agentic chat ready with %d tool(s).", len(tools))
         except Exception as exc:  # noqa: BLE001 - fall back to the legacy chain
@@ -226,18 +221,6 @@ async def lifespan_agent():
         finally:
             _agent = None
             _status = AgentStatus()
-
-
-def _history_to_messages(history: List[dict]) -> List[BaseMessage]:
-    """Convert the stored ``{role, content}`` history into chat messages."""
-    messages: List[BaseMessage] = []
-    for entry in history[-settings.max_chat_history_messages :]:
-        content = entry.get("content", "")
-        if entry.get("role") == "assistant":
-            messages.append(AIMessage(content=content))
-        else:
-            messages.append(HumanMessage(content=content))
-    return messages
 
 
 def _chunk_text(content) -> str:
@@ -287,7 +270,7 @@ async def aanswer_question(question: str, session_id: str) -> AgentResult:
     """
     from services import rag_service
 
-    history = rag_service.chat_sessions.setdefault(session_id, [])
+    history = rag_service.get_history(session_id)
 
     # Fast path: exhaustive "list everything" requests bypass the LLM entirely,
     # matching the legacy behaviour.
@@ -300,8 +283,7 @@ async def aanswer_question(question: str, session_id: str) -> AgentResult:
         answer = await asyncio.to_thread(rag_service.answer_question, question, session_id)
         return AgentResult(answer=answer, tools_used=[])
 
-    messages = _history_to_messages(history)
-    messages.append(HumanMessage(content=question))
+    messages = [*rag_service.recent_messages(history), HumanMessage(content=question)]
 
     try:
         result = await _agent.ainvoke({"messages": messages})
@@ -335,7 +317,7 @@ async def astream_answer(
     """
     from services import rag_service
 
-    history = rag_service.chat_sessions.setdefault(session_id, [])
+    history = rag_service.get_history(session_id)
 
     # Fast path: exhaustive "list everything" requests bypass the LLM entirely,
     # matching the legacy behaviour.
@@ -351,8 +333,7 @@ async def astream_answer(
             yield event
         return
 
-    messages = _history_to_messages(history)
-    messages.append(HumanMessage(content=question))
+    messages = [*rag_service.recent_messages(history), HumanMessage(content=question)]
 
     parts: List[str] = []
     tools_used: List[str] = []
@@ -363,8 +344,9 @@ async def astream_answer(
             {"messages": messages}, stream_mode=["updates", "messages"]
         ):
             if mode == "messages":
-                chunk, _meta = data
-                if isinstance(chunk, AIMessageChunk):
+                chunk, meta = data
+                # Only the agent's answer node: LLM calls inside tools also emit chunks.
+                if isinstance(chunk, AIMessageChunk) and meta.get("langgraph_node") == "model":
                     text = _chunk_text(chunk.content)
                     if text:
                         started = True
@@ -403,24 +385,24 @@ async def astream_answer(
 async def _astream_legacy(
     question: str, session_id: str
 ) -> AsyncIterator[Tuple[str, dict]]:
-    """Stream the classic RAG chain token-by-token, without editing rag_service.
+    """Stream the classic RAG chain token-by-token.
 
-    Rebuilds the retrieval query exactly as ``rag_service.answer_question`` does,
-    runs the synchronous retrieval in a thread, then streams the LCEL chain. If
-    the chain stream itself fails, falls back to the fully synchronous
+    Retrieves through ``query_service`` exactly as ``rag_service.answer_question``
+    does (in a thread), then streams the LCEL chain. If the chain stream itself
+    fails, falls back to the fully synchronous
     ``answer_question`` (which persists its own turn) emitted as a single token.
     """
-    from services import embed_service, rag_service
+    from services import query_service, rag_service
 
-    history = rag_service.chat_sessions.setdefault(session_id, [])
+    history = rag_service.get_history(session_id)
     chat_history = rag_service.format_chat_history(history)
-    retrieval_query = (
-        question if not history else f"{chat_history}\nCurrent question: {question}"
-    )
 
     try:
         context = await asyncio.to_thread(
-            embed_service.retrieve_from_all_sources, retrieval_query
+            query_service.build_retrieval_documents,
+            question,
+            chat_history,
+            rag_service.model,
         )
         parts: List[str] = []
         async for chunk in rag_service.chain.astream(

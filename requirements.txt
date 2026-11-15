@@ -1,4 +1,4 @@
-langchain
+langchain>=1.0,<2
 langchain-ollama
 langchain-chroma
 langchain-openai
@@ -9,13 +9,14 @@ fastapi
 uvicorn
 python-multipart
 python-dotenv
+pydantic-settings>=2.16,<3
 pandas
 openpyxl
 xlrd
-pypdf
-python-pptx
-pillow
-pytesseract
+# PDF/PowerPoint parsing. Pulls torch: on CPU-only machines install with
+#   pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
+# and prefetch the layout models with `docling-tools models download`.
+docling
 boto3
 
 # Optional: SAP HANA Cloud Vector Engine backend

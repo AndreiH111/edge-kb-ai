@@ -11,6 +11,8 @@
 [MAIN]
 # Tests exercise private module state (_agent, _status) by design.
 py-version = 3.13
+# Docling (torch) is lazily imported and may be absent from a lint-only venv.
+ignored-modules = docling
 
 [MESSAGES CONTROL]
 disable =
@@ -22,7 +24,7 @@ disable =
     # --- Intentional patterns in this codebase ---
     import-outside-toplevel,        # lazy imports inside functions are mandated (CLAUDE.md)
     broad-exception-caught,         # deliberate resilience (agent/MCP fall back, never crash)
-    global-statement,              # module-level singletons (_agent, documents, ids, retriever)
+    global-statement,              # module-level singletons (_agent, documents, ids, _CONVERTER)
     global-variable-not-assigned,  # same module-state pattern
 
     # --- Framework / dynamic-analysis false positives ---

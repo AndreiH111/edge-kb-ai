@@ -1,20 +1,15 @@
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from langchain_core.documents import Document
 
 from core.config import settings
+from services import document_service
+from services.bm25_service import fuse_rrf, get_index
 from services.chunking_service import chunk_documents
-from services.classifier_service import classify_excel_file, classify_excel_files
-from services.excel_service import (
-    is_supported_excel_file,
-    load_excel_documents,
-    row_to_document,
-)
+from services.excel_service import is_supported_excel_file, load_excel_documents, load_excel_file
 from services.file_service import get_supported_files, sync_storage_to_local
-from services.pdf_service import load_pdf_documents, page_to_document
-from services.ppt_service import load_powerpoint_documents, slide_to_document
 from services.vectorstore_service import build_vector_store
 
 
@@ -67,24 +62,21 @@ vector_store = build_vector_store(embeddings)
 
 documents: List[Document] = []
 ids: List[str] = []
-retriever = vector_store.as_retriever(search_kwargs={"k": settings.retriever_k})
+
+
+def load_all_documents() -> Tuple[List[Document], List[str]]:
+    """Parse every stored file and chunk the result (the in-memory ``documents``/``ids`` shape)."""
+    loaded = load_excel_documents()
+    print(f"Loaded {len(loaded)} Excel documents")
+    loaded += document_service.load_documents()
+    return chunk_documents(loaded, [document.id for document in loaded])
 
 
 def refresh_vector_store() -> int:
-    global documents, ids, retriever
+    global documents, ids
 
     sync_storage_to_local()
-    classify_excel_files()
-
-    excel_documents, excel_ids = load_excel_documents()
-    print(f"Loaded {len(excel_documents)} Excel documents")
-    pdf_documents, pdf_ids = load_pdf_documents()
-    powerpoint_documents, powerpoint_ids = load_powerpoint_documents()
-
-    documents = excel_documents + pdf_documents + powerpoint_documents
-    ids = excel_ids + pdf_ids + powerpoint_ids
-
-    documents, ids = chunk_documents(documents, ids)
+    documents, ids = load_all_documents()
 
     vector_store.reset_collection()
 
@@ -96,61 +88,19 @@ def refresh_vector_store() -> int:
             vector_store.add_documents(batch_docs, ids=batch_ids)
             print(f"Indexed batch {i // batch_size + 1}: {len(batch_docs)} documents")
 
-    retriever = vector_store.as_retriever(search_kwargs={"k": settings.retriever_k})
     return len(documents)
 
 
-def parse_file(file_path: Path) -> Tuple[List[Document], List[str]]:
-    suffix = file_path.suffix.lower()
-
+def parse_file(file_path: Path) -> List[Document]:
     if is_supported_excel_file(file_path.name):
-        import pandas as pd
-
-        classify_excel_file(file_path)
-        sheets = pd.read_excel(file_path, sheet_name=None)
-        file_documents = []
-        file_ids = []
-        for sheet_name, df in sheets.items():
-            for row_index, row in df.dropna(how="all").iterrows():
-                document = row_to_document(file_path, sheet_name, row_index, row)
-                if document.page_content.strip():
-                    file_documents.append(document)
-                    file_ids.append(document.id)
-        return file_documents, file_ids
-
-    if suffix in settings.supported_pdf_extensions:
-        from pypdf import PdfReader
-
-        reader = PdfReader(str(file_path))
-        file_documents = []
-        file_ids = []
-        for page_index, page in enumerate(reader.pages, start=1):
-            text = page.extract_text() or ""
-            if not text.strip():
-                continue
-            document = page_to_document(file_path, page_index, text)
-            file_documents.append(document)
-            file_ids.append(document.id)
-        return file_documents, file_ids
-
-    if suffix in settings.supported_powerpoint_extensions:
-        from pptx import Presentation
-
-        presentation = Presentation(str(file_path))
-        file_documents = []
-        file_ids = []
-        for slide_index, slide in enumerate(presentation.slides, start=1):
-            document = slide_to_document(file_path, slide_index, slide)
-            if document.page_content.strip():
-                file_documents.append(document)
-                file_ids.append(document.id)
-        return file_documents, file_ids
-
-    return [], []
+        return load_excel_file(file_path)
+    if document_service.is_document_file(file_path):
+        return document_service.load_file(file_path)
+    return []
 
 
 def index_file(filename: str) -> int:
-    global documents, ids, retriever
+    global documents, ids
 
     sync_storage_to_local()
 
@@ -163,21 +113,20 @@ def index_file(filename: str) -> int:
     if file_path is None:
         return 0
 
-    file_documents, file_ids = parse_file(file_path)
+    file_documents = parse_file(file_path)
     if not file_documents:
         return 0
 
-    file_documents, file_ids = chunk_documents(file_documents, file_ids)
+    file_documents, file_ids = chunk_documents(file_documents, [document.id for document in file_documents])
 
     documents.extend(file_documents)
     ids.extend(file_ids)
     vector_store.add_documents(file_documents, ids=file_ids)
-    retriever = vector_store.as_retriever(search_kwargs={"k": settings.retriever_k})
     return len(file_documents)
 
 
 def remove_file(filename: str) -> int:
-    global documents, ids, retriever
+    global documents, ids
 
     prefix = f"{filename}:"
     remove_ids = [doc_id for doc_id in ids if doc_id.startswith(prefix)]
@@ -197,34 +146,23 @@ def remove_file(filename: str) -> int:
 
     documents = new_documents
     ids = new_ids
-
-    retriever = vector_store.as_retriever(search_kwargs={"k": settings.retriever_k})
     return len(remove_ids)
 
 
 def initialize_on_startup() -> int:
-    global documents, ids, retriever
+    global documents, ids
 
     sync_storage_to_local()
-    classify_excel_files()
 
     try:
-        results = vector_store.similarity_search("test", k=1)
+        # Plain retriever, not similarity_search: RETRIEVER_SCORE_THRESHOLD must not hide existing data.
+        results = vector_store.as_retriever(search_kwargs={"k": 1}).invoke("test")
         has_data = len(results) > 0
     except Exception:
         has_data = False
 
     if has_data:
-        excel_documents, excel_ids = load_excel_documents()
-        pdf_documents, pdf_ids = load_pdf_documents()
-        powerpoint_documents, powerpoint_ids = load_powerpoint_documents()
-
-        documents = excel_documents + pdf_documents + powerpoint_documents
-        ids = excel_ids + pdf_ids + powerpoint_ids
-
-        documents, ids = chunk_documents(documents, ids)
-
-        retriever = vector_store.as_retriever(search_kwargs={"k": settings.retriever_k})
+        documents, ids = load_all_documents()
         print(f"Vector store has data. Rebuilt in-memory lists: {len(documents)} documents")
         return len(documents)
 
@@ -282,13 +220,24 @@ def get_sources_matching_query(query: str) -> List[str]:
     return matched_sources
 
 
+def _search(query: str, k: int, source: Optional[str] = None) -> List[Document]:
+    """Top-``k`` for ``query``: vector search, fused with BM25 over ``documents`` when hybrid is on."""
+    kwargs = {"filter": {"source": source}} if source else {}
+    if not settings.hybrid_search_enabled:
+        return vector_store.similarity_search(query, k=k, **kwargs)
+    fetch = max(k, settings.hybrid_candidates)
+    lexical = get_index(documents).search(query, fetch, source=source)
+    semantic = vector_store.similarity_search(query, k=fetch, **kwargs)
+    return fuse_rrf([lexical, semantic])[:k]
+
+
 def retrieve_from_all_sources(query: str) -> List[Document]:
     if not documents:
         return []
 
     matched_sources = get_sources_matching_query(query)
     if not matched_sources:
-        return vector_store.similarity_search(query, k=settings.retriever_k)
+        return _search(query, settings.retriever_k)
 
     # Small named files go in whole so filtered questions ("which internships
     # are remote?") see every row; the character budget keeps the prompt bounded.
@@ -303,9 +252,7 @@ def retrieve_from_all_sources(query: str) -> List[Document]:
     return [
         document
         for source in matched_sources
-        for document in vector_store.similarity_search(
-            query, k=settings.retriever_k_per_source, filter={"source": source}
-        )
+        for document in _search(query, settings.retriever_k_per_source, source)
     ]
 
 

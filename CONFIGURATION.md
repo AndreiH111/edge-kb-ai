@@ -6,6 +6,8 @@ All settings are loaded from a `.env` file in the project root. Copy `.env.examp
 cp .env.example .env
 ```
 
+Values in `.env` override variables already exported in the shell. Blank values (`NAME=`) count as unset, so the default or the next legacy name applies. Settings are validated when the app starts: a malformed value (e.g. `CHROMA_PORT=notanint`, `LLM_MODE=cloud`, `CHROMA_SSL=maybe`) stops startup with a pydantic `ValidationError` naming the variable, instead of silently falling back to the default. Booleans accept `true/false`, `1/0`, `yes/no`, `on/off`.
+
 ---
 
 ## File Storage
@@ -87,16 +89,27 @@ Set `EMBEDDING_MODE=local` for Ollama, `EMBEDDING_MODE=custom` for built-in hash
 
 ---
 
+## Document Parsing
+
+PDF and PowerPoint (`.pptx`/`.pptm`) files are converted with [Docling](https://github.com/docling-project/docling): layout-aware text, tables rendered as Markdown, and OCR for scanned pages. Each page/slide becomes one document. Excel rows are read with pandas, one document per row. There are no settings for this.
+
+> **First run downloads models:** Docling fetches its layout/table models (a few hundred MB) on the first PDF/PowerPoint conversion, so that upload is slow and needs network. Prefetch them with `docling-tools models download`. Docling pulls in PyTorch; on CPU-only machines install it with `pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu`.
+
+> **Upgrading from the pypdf/python-pptx parser:** existing vectors keep the old text. Run `POST /ai/reindex` once so the store matches what Docling now extracts. Startup re-parses every stored PDF/PowerPoint to rebuild the in-memory corpus, so with many files it is noticeably slower than before. A file that fails to convert is skipped with a log line.
+
+---
+
 ## Chunking
 
 Controls how parsed documents are split into smaller pieces before embedding.
 
-If `CHUNKING_MODE` is not set, it inherits from `LLM_MODE`. When set to `hosted`, the app uses an LLM to perform semantic chunking (splitting by meaning). When `local`, documents pass through a rule-based splitter.
+If `CHUNKING_MODE` is not set, it inherits from `LLM_MODE`. When set to `hosted`, the app uses an LLM to perform semantic chunking (splitting by meaning). When `local`, no LLM is used: Excel rows pass through unsplit, and PDF pages / slides longer than `LOCAL_CHUNK_SIZE` characters are split by a rule-based `RecursiveCharacterTextSplitter` (ids become `{source}:...:chunk:{n}`, every chunk carries `chunk_index`, `0` for an unsplit document).
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `CHUNKING_MODE` | value of `LLM_MODE` | `local` or `hosted` |
-| `OLLAMA_CHUNKING_MODEL` | value of `OLLAMA_LLM_MODEL` | Ollama model for local chunking |
+| `LOCAL_CHUNK_SIZE` | `1500` | Local mode: max characters per PDF/PPT chunk before splitting; `0` disables splitting (pure passthrough). Chunk ids depend on it, so run `POST /ai/reindex` once after upgrading or changing it (startup skips reindexing a non-empty store) |
+| `OLLAMA_CHUNKING_MODEL` | value of `OLLAMA_LLM_MODEL` | Reserved; local chunking currently calls no LLM |
 | `HOSTED_CHUNKING_PROVIDER` | `openai` | `openai` or `groq` |
 | `HOSTED_CHUNKING_MODEL` | `gpt-4o-mini` | Hosted model for semantic chunking |
 | `HOSTED_CHUNKING_API_KEY` | — | API key (falls back to `OPENAI_API_KEY`) |
@@ -104,6 +117,8 @@ If `CHUNKING_MODE` is not set, it inherits from `LLM_MODE`. When set to `hosted`
 | `HOSTED_CHUNKING_TEMPERATURE` | `1` | Sampling temperature |
 | `HOSTED_CHUNKING_TOP_P` | `1` | Top-p sampling |
 | `HOSTED_CHUNKING_MAX_TOKENS` | `2048` | Max tokens for chunking responses |
+
+> **Excel in hosted mode:** Excel rows are tagged `file_type=excel`, so `CHUNKING_MODE=hosted` routes them through the sheet classifier (structured sheets stay one row per chunk; unstructured sheets are grouped and titled by the LLM).
 
 > **Fallback:** If the hosted chunking LLM is unreachable, a rule-based `RecursiveCharacterTextSplitter` is used automatically.
 
@@ -120,8 +135,20 @@ Tuning parameters for the retrieval pipeline and chat session memory.
 | `RETRIEVER_K` | `5` | Documents retrieved per query when the question doesn't name a file (one search across all files) |
 | `RETRIEVER_MAX_FILE_CHARS` | `12000` | When the question names file(s) whose combined text is at most this many characters, the whole file(s) are sent to the LLM (complete answers for small spreadsheets). Lower it for low token-rate tiers |
 | `RETRIEVER_K_PER_SOURCE` | `3` | Documents retrieved from each named file when the named files are too large to send whole |
+| `RETRIEVER_SEARCH_TYPE` | `similarity` | `similarity` (nearest neighbours) or `mmr` (maximal marginal relevance: re-ranks the `RETRIEVER_MMR_FETCH_K` nearest chunks for diversity, which helps when a file has many near-duplicate rows) |
+| `RETRIEVER_MMR_FETCH_K` | `20` | Candidates fetched before MMR re-ranking (`mmr` only; never less than the requested `k`) |
+| `RETRIEVER_MMR_LAMBDA` | `0.5` | MMR relevance/diversity trade-off, `0` = max diversity, `1` = pure relevance (`mmr` only) |
+| `RETRIEVER_SCORE_THRESHOLD` | — | Unset = off. Keep only chunks whose relevance score is at least this value (`similarity` only). Chroma-only; see the Vector Store section before enabling |
+| `HYBRID_SEARCH_ENABLED` | `true` | Fuse a stdlib BM25 lexical ranking of the in-memory corpus with the vector search (reciprocal rank fusion) so exact codes and rare words rank first. `false` restores pure vector search |
+| `HYBRID_CANDIDATES` | `20` | Candidates fetched from each of BM25 and the vector store before fusion; the top `RETRIEVER_K` / `RETRIEVER_K_PER_SOURCE` of the fused list are returned |
+| `QUERY_REWRITE_ENABLED` | `true` | On the classic RAG path, rewrite a follow-up question plus the chat history into one standalone retrieval question with the LLM (the first question of a session is never rewritten). `false` (or a failed rewrite) keeps the previous behaviour: chat history and question are searched together |
+| `MULTI_QUERY_COUNT` | `1` | Total retrieval queries per question: the (rewritten) question plus up to `N-1` LLM paraphrases; results are unioned and de-duplicated. `1` disables paraphrasing. Each extra query adds one LLM call and can grow the retrieved context up to N times |
 | `MAX_CHAT_HISTORY_MESSAGES` | `12` | Messages retained per chat session |
 | `MAX_CHAT_HISTORY_CONTENT_CHARS` | `2000` | Max characters kept per history message |
+| `RAG_GRADING_ENABLED` | `true` | Agent knowledge-base search: one LLM call grades each retrieved passage yes/no and drops irrelevant ones. Named small files sent whole are never graded |
+| `RAG_MAX_RETRIES` | `1` | When grading finds nothing relevant, how many times the LLM rewrites the query and searches again. After the last retry the graded-out passages are returned rather than nothing |
+| `RAG_RERANK_ENABLED` | `true` | Agent knowledge-base search: one LLM call reorders the passages by relevance, then keeps the top `RAG_RERANK_TOP_N` |
+| `RAG_RERANK_TOP_N` | `5` | Passages kept after a successful rerank (`0` = keep all). Questions naming several large files get `RETRIEVER_K_PER_SOURCE` passages per file, so a low value can drop a file from a comparison; raise it (or use `0`) if you compare many files |
 
 ---
 
@@ -159,6 +186,11 @@ The chat is **agentic**: the LLM decides which tools to call instead of always r
 Controls where embeddings are persisted and searched.
 
 Set `VECTOR_DB_BACKEND=chroma` (default) for ChromaDB, or `VECTOR_DB_BACKEND=hana` for SAP HANA Cloud Vector Engine.
+
+The search options in *Retrieval & Chat History* (`RETRIEVER_SEARCH_TYPE`, `RETRIEVER_MMR_*`, `RETRIEVER_SCORE_THRESHOLD`) are applied inside the backend wrapper:
+
+- **Chroma** supports both `mmr` and `RETRIEVER_SCORE_THRESHOLD`. The collection uses Chroma's default `l2` distance, so relevance scores only fall in `[0, 1]` for unit-normalised embeddings (e.g. OpenAI); with other embeddings a fixed threshold is unreliable and LangChain logs a warning. `mmr` is safe with any embedding.
+- **HANA** supports `mmr` when the installed `langchain-hana` provides `max_marginal_relevance_search`; otherwise it logs one warning and falls back to plain similarity search. `RETRIEVER_SCORE_THRESHOLD` is ignored on HANA (same one-time warning).
 
 ### ChromaDB
 

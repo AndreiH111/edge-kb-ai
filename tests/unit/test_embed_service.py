@@ -10,7 +10,6 @@ The class is skipped unless the offline settings pinned by the root
 real ``.env``), and loads the module in ``setUpClass`` so a skip runs nothing.
 """
 
-import dataclasses
 import importlib.util
 import unittest
 from pathlib import Path
@@ -23,16 +22,21 @@ from core.config import settings
 EMBED_SERVICE_PATH = Path(__file__).resolve().parents[2] / "services" / "embed_service.py"
 
 
-def _doc(source: str, text: str = "content") -> Document:
-    return Document(page_content=text, metadata={"source": source})
-
-
-@unittest.skipUnless(
+# Shared with test_rag_format: these classes load real service code, so they run
+# only under conftest's offline settings (plain unittest reads the real .env).
+offline_only = unittest.skipUnless(
     settings.storage_backend == "local"
     and settings.use_custom_hash_embeddings
     and settings.use_local_chunking,
     "needs the offline settings pinned by conftest.py (run with pytest)",
 )
+
+
+def _doc(source: str, text: str = "content") -> Document:
+    return Document(page_content=text, metadata={"source": source})
+
+
+@offline_only
 class RetrieveFromAllSourcesTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -54,7 +58,7 @@ class RetrieveFromAllSourcesTests(unittest.TestCase):
 
         self.module.retrieve_from_all_sources(query)
 
-        self.store.similarity_search.assert_called_once_with(query, k=self.module.settings.retriever_k)
+        self.store.similarity_search.assert_called_once_with(query, k=self.module.settings.hybrid_candidates)
 
     def test_small_named_file_is_returned_whole(self) -> None:
         internships = [_doc("Internships_2024.xlsx", f"row {index}") for index in range(3)]
@@ -67,16 +71,41 @@ class RetrieveFromAllSourcesTests(unittest.TestCase):
 
     def test_large_named_file_is_searched_not_dumped(self) -> None:
         self.module.documents = [_doc("Internships_2024.xlsx", "x" * 50), _doc("handbook.pdf")]
-        tight = dataclasses.replace(self.module.settings, retriever_max_file_chars=10)
+        tight = self.module.settings.model_copy(update={"retriever_max_file_chars": 10})
 
         with patch.object(self.module, "settings", tight):
             self.module.retrieve_from_all_sources("Which internships are remote?")
 
         self.store.similarity_search.assert_called_once_with(
             "Which internships are remote?",
-            k=tight.retriever_k_per_source,
+            k=tight.hybrid_candidates,
             filter={"source": "Internships_2024.xlsx"},
         )
+
+    def test_global_search_fuses_bm25_and_vector_results(self) -> None:
+        doc_a = _doc("a.pdf", "unrelated vector hit")
+        doc_b = _doc("b.pdf", "habitat notes")
+        doc_c = _doc("c.pdf", "quokka habitat on the island")
+        self.module.documents = [doc_b, doc_c]
+        self.store.similarity_search.return_value = [doc_a, doc_b]
+
+        result = self.module.retrieve_from_all_sources("quokka habitat")
+
+        # B is in both rankings so it fuses highest; C (BM25 only) and A (vector only) follow.
+        self.assertEqual(result[0], doc_b)
+        self.assertCountEqual(result[1:], [doc_a, doc_c])
+
+    def test_hybrid_disabled_returns_vector_results_untouched(self) -> None:
+        doc_a, doc_b = _doc("a.pdf", "first"), _doc("b.pdf", "second")
+        self.module.documents = [doc_b, _doc("c.pdf", "quokka")]
+        self.store.similarity_search.return_value = [doc_a, doc_b]
+        classic = self.module.settings.model_copy(update={"hybrid_search_enabled": False})
+
+        with patch.object(self.module, "settings", classic):
+            result = self.module.retrieve_from_all_sources("quokka")
+
+        self.assertEqual(result, [doc_a, doc_b])
+        self.store.similarity_search.assert_called_once_with("quokka", k=classic.retriever_k)
 
 
 if __name__ == "__main__":

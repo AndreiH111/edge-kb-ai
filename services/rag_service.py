@@ -1,20 +1,33 @@
 import re
-from typing import Dict, List
+from collections import defaultdict
+from typing import DefaultDict, List
 
+from langchain.chat_models import init_chat_model
+from langchain_core.chat_history import InMemoryChatMessageHistory
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    get_buffer_string,
+    trim_messages,
+)
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from core.config import settings
-from services import embed_service
+from services import embed_service, query_service
 
 
-chat_sessions: Dict[str, List[Dict[str, str]]] = {}
+chat_sessions: DefaultDict[str, InMemoryChatMessageHistory] = defaultdict(
+    InMemoryChatMessageHistory
+)
 
 template = """
 You are an expert assistant. Answer the user's question clearly and concisely.
 Use the chat history to understand follow-up questions and references to earlier messages.
 Use the retrieved context when it is relevant to the user's question.
 If the user names a specific file, prioritize records from that source file.
+Cite the context passages you used as [n] and name their file; do not cite passages you did not use.
 
 Chat history:
 {chat_history}
@@ -30,65 +43,84 @@ prompt = ChatPromptTemplate.from_template(template)
 
 def create_llm():
     if settings.use_local_llm:
-        from langchain_ollama import ChatOllama
+        return init_chat_model(settings.ollama_llm_model, model_provider="ollama")
 
-        return ChatOllama(model=settings.ollama_llm_model)
-
-    if settings.hosted_llm_provider == "openai":
-        from langchain_openai import ChatOpenAI
-
-        kwargs = {
-            "model": settings.hosted_llm_model,
-            "temperature": settings.hosted_llm_temperature,
-            "max_tokens": settings.hosted_llm_max_tokens,
-            "model_kwargs": {"top_p": settings.hosted_llm_top_p},
-        }
-        if settings.hosted_llm_api_key:
-            kwargs["api_key"] = settings.hosted_llm_api_key
-        if settings.hosted_llm_base_url:
-            kwargs["base_url"] = settings.hosted_llm_base_url
-
-        return ChatOpenAI(**kwargs)
-
+    optional = {
+        key: value
+        for key, value in (
+            ("api_key", settings.hosted_llm_api_key),
+            ("base_url", settings.hosted_llm_base_url),
+        )
+        if value
+    }
     if settings.hosted_llm_provider == "groq":
-        from langchain_groq import ChatGroq
+        optional["reasoning_effort"] = settings.groq_reasoning_effort
 
-        kwargs = {
-            "model": settings.hosted_llm_model,
-            "temperature": settings.hosted_llm_temperature,
-            "max_tokens": settings.hosted_llm_max_tokens,
-            "model_kwargs": {"top_p": settings.hosted_llm_top_p},
-            "reasoning_effort": settings.groq_reasoning_effort,
-        }
-        if settings.hosted_llm_api_key:
-            kwargs["api_key"] = settings.hosted_llm_api_key
-        if settings.hosted_llm_base_url:
-            kwargs["groq_api_base"] = settings.hosted_llm_base_url
-
-        return ChatGroq(**kwargs)
-
-    raise ValueError(f"Unsupported hosted LLM provider: {settings.hosted_llm_provider}")
+    return init_chat_model(
+        settings.hosted_llm_model,
+        model_provider=settings.hosted_llm_provider,
+        temperature=settings.hosted_llm_temperature,
+        max_tokens=settings.hosted_llm_max_tokens,
+        model_kwargs={"top_p": settings.hosted_llm_top_p},
+        **optional,
+    )
 
 
 model = create_llm()
 chain = prompt | model | StrOutputParser()
 
 
-def format_chat_history(history: List[Dict[str, str]]) -> str:
-    if not history:
-        return "No previous messages in this session."
+def get_history(session_id: str) -> InMemoryChatMessageHistory:
+    """Return the session's chat history, creating it on first use."""
+    return chat_sessions[session_id]
 
-    recent_history = history[-settings.max_chat_history_messages :]
-    return "\n".join(
-        f"{message['role'].title()}: {message['content']}" for message in recent_history
+
+def recent_messages(history: InMemoryChatMessageHistory) -> List[BaseMessage]:
+    """The last ``MAX_CHAT_HISTORY_MESSAGES`` messages, starting on a user turn."""
+    return trim_messages(
+        history.messages,
+        max_tokens=settings.max_chat_history_messages,
+        token_counter=len,
+        strategy="last",
+        start_on="human",
     )
 
 
+def format_chat_history(history: InMemoryChatMessageHistory) -> str:
+    recent = recent_messages(history)
+    if not recent:
+        return "No previous messages in this session."
+
+    return get_buffer_string(recent, human_prefix="User", ai_prefix="Assistant")
+
+
+def _locator(metadata: dict) -> str:
+    """One-line citation locator from loader metadata, e.g. ``a.xlsx (sheet Data, row 3)``."""
+    parts = [f"{key} {metadata[key]}" for key in ("sheet", "page", "slide") if key in metadata]
+    if "row_range" in metadata:
+        parts.append(f"rows {metadata['row_range']}")
+    elif "row" in metadata:
+        parts.append(f"row {metadata['row']}")
+    source = metadata.get("source") or "unknown source"
+    return f"{source} ({', '.join(parts)})" if parts else source
+
+
 def format_context(documents) -> str:
+    """Number the passages as ``[n] <locator>`` blocks, deduped by ``id`` (or content)."""
     if not documents:
         return "No relevant context found."
 
-    return "\n\n".join(document.page_content for document in documents)
+    seen = set()
+    passages = []
+    for document in documents:
+        key = document.id if document.id is not None else document.page_content
+        if key in seen:
+            continue
+        seen.add(key)
+        passages.append(
+            f"[{len(passages) + 1}] {_locator(document.metadata)}\n{document.page_content}"
+        )
+    return "\n\n".join(passages)
 
 
 def truncate_history_content(content: str) -> str:
@@ -98,16 +130,17 @@ def truncate_history_content(content: str) -> str:
     return f"{content[:settings.max_chat_history_content_chars]}... [truncated]"
 
 
-def add_chat_history(history: List[Dict[str, str]], question: str, answer: str) -> None:
-    history.extend(
+def add_chat_history(
+    history: InMemoryChatMessageHistory, question: str, answer: str
+) -> None:
+    # One add_messages call keeps the question/answer pair adjacent.
+    history.add_messages(
         [
-            {"role": "user", "content": truncate_history_content(question)},
-            {"role": "assistant", "content": truncate_history_content(answer)},
+            HumanMessage(truncate_history_content(question)),
+            AIMessage(truncate_history_content(answer)),
         ]
     )
-
-    if len(history) > settings.max_chat_history_messages:
-        del history[: -settings.max_chat_history_messages]
+    history.messages = recent_messages(history)
 
 
 def is_exhaustive_data_request(question: str) -> bool:
@@ -163,7 +196,7 @@ def format_all_records() -> str:
 
 
 def answer_question(question: str, session_id: str) -> str:
-    history = chat_sessions.setdefault(session_id, [])
+    history = get_history(session_id)
 
     if is_exhaustive_data_request(question):
         answer = format_all_records()
@@ -171,10 +204,7 @@ def answer_question(question: str, session_id: str) -> str:
         return answer
 
     chat_history = format_chat_history(history)
-    retrieval_query = (
-        question if not history else f"{chat_history}\nCurrent question: {question}"
-    )
-    context = embed_service.retrieve_from_all_sources(retrieval_query)
+    context = query_service.build_retrieval_documents(question, chat_history, model)
     answer = chain.invoke(
         {
             "chat_history": chat_history,

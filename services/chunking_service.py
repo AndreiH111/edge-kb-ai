@@ -1,7 +1,8 @@
 """Agentic semantic chunking service.
 
 When CHUNKING_MODE=hosted, documents are split into meaning-based chunks using an
-LLM. When CHUNKING_MODE=local, documents pass through unchanged (current behavior).
+LLM. When CHUNKING_MODE=local, no LLM is used: PDF/PPT docs longer than
+LOCAL_CHUNK_SIZE are size-split and Excel rows pass through.
 
 If the hosted LLM is unreachable, a rule-based RecursiveCharacterTextSplitter is
 used as a fallback.
@@ -10,10 +11,13 @@ used as a fallback.
 import json
 import re
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
+from langchain.chat_models import init_chat_model
 from langchain_core.documents import Document
+from langchain_core.utils.json import parse_json_markdown
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pydantic import BaseModel, TypeAdapter
 
 from core.config import settings
 from services.classifier_service import SheetClassification, classify_excel_files
@@ -38,6 +42,16 @@ FALLBACK_CHUNK_OVERLAP = 80
 FALLBACK_SEPARATORS = ["\n\n", "\n", ". ", " "]
 
 
+class _Section(BaseModel):
+    """One titled section in the chunking LLM's JSON reply."""
+
+    title: str
+    content: str
+
+
+_SECTIONS = TypeAdapter(list[_Section])
+
+
 # ---------------------------------------------------------------------------
 # LLM client creation
 # ---------------------------------------------------------------------------
@@ -45,43 +59,21 @@ FALLBACK_SEPARATORS = ["\n\n", "\n", ". ", " "]
 
 def create_chunking_llm():
     """Create the LLM client for semantic chunking based on hosted chunking settings."""
-    provider = settings.hosted_chunking_provider
-
-    if provider == "openai":
-        from langchain_openai import ChatOpenAI
-
-        kwargs: Dict[str, Any] = {
-            "model": settings.hosted_chunking_model,
-            "temperature": settings.hosted_chunking_temperature,
-            "max_tokens": settings.hosted_chunking_max_tokens,
-            "model_kwargs": {"top_p": settings.hosted_chunking_top_p},
-        }
-        if settings.hosted_chunking_api_key:
-            kwargs["api_key"] = settings.hosted_chunking_api_key
-        if settings.hosted_chunking_base_url:
-            kwargs["base_url"] = settings.hosted_chunking_base_url
-
-        return ChatOpenAI(**kwargs)
-
-    if provider == "groq":
-        from langchain_groq import ChatGroq
-
-        kwargs = {
-            "model": settings.hosted_chunking_model,
-            "temperature": settings.hosted_chunking_temperature,
-            "max_tokens": settings.hosted_chunking_max_tokens,
-            "model_kwargs": {"top_p": settings.hosted_chunking_top_p},
-        }
-        if settings.hosted_chunking_api_key:
-            kwargs["api_key"] = settings.hosted_chunking_api_key
-        if settings.hosted_chunking_base_url:
-            kwargs["groq_api_base"] = settings.hosted_chunking_base_url
-
-        return ChatGroq(**kwargs)
-
-    raise ValueError(
-        f"Unsupported hosted chunking provider: {provider}. "
-        "Set HOSTED_CHUNKING_PROVIDER to 'openai' or 'groq'."
+    optional = {
+        key: value
+        for key, value in (
+            ("api_key", settings.hosted_chunking_api_key),
+            ("base_url", settings.hosted_chunking_base_url),
+        )
+        if value
+    }
+    return init_chat_model(
+        settings.hosted_chunking_model,
+        model_provider=settings.hosted_chunking_provider,
+        temperature=settings.hosted_chunking_temperature,
+        max_tokens=settings.hosted_chunking_max_tokens,
+        model_kwargs={"top_p": settings.hosted_chunking_top_p},
+        **optional,
     )
 
 
@@ -105,14 +97,9 @@ def is_chunking_llm_available(llm=None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-_fallback_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=FALLBACK_CHUNK_SIZE,
-    chunk_overlap=FALLBACK_CHUNK_OVERLAP,
-    separators=FALLBACK_SEPARATORS,
-)
-
-
-def fallback_chunk_document(document: Document) -> List[Document]:
+def fallback_chunk_document(
+    document: Document, chunk_size: int = FALLBACK_CHUNK_SIZE
+) -> List[Document]:
     """Split a document using RecursiveCharacterTextSplitter as a fallback.
 
     If the content is shorter than chunk_size, return it as a single chunk.
@@ -121,7 +108,7 @@ def fallback_chunk_document(document: Document) -> List[Document]:
     original_id = document.id or ""
     content = document.page_content
 
-    if len(content) <= FALLBACK_CHUNK_SIZE:
+    if len(content) <= chunk_size:
         return [
             Document(
                 page_content=content,
@@ -130,7 +117,13 @@ def fallback_chunk_document(document: Document) -> List[Document]:
             )
         ]
 
-    texts = _fallback_splitter.split_text(content)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        # Keep the default 512/80 ratio (~15% overlap) for any size.
+        chunk_overlap=chunk_size * FALLBACK_CHUNK_OVERLAP // FALLBACK_CHUNK_SIZE,
+        separators=FALLBACK_SEPARATORS,
+    )
+    texts = splitter.split_text(content)
 
     chunks = []
     for index, text in enumerate(texts, start=1):
@@ -159,34 +152,13 @@ def _extract_last_sentences(text: str, count: int = 2) -> str:
 
 
 def _parse_llm_json_response(response_text: str) -> Optional[List[Dict[str, str]]]:
-    """Parse LLM response as JSON, handling markdown code fences."""
-    text = response_text.strip()
-
-    # Strip markdown code fences if present
-    if text.startswith("```"):
-        lines = text.split("\n")
-        # Remove first line (```json or ```) and last line (```)
-        if lines[-1].strip() == "```":
-            lines = lines[1:-1]
-        else:
-            lines = lines[1:]
-        text = "\n".join(lines).strip()
-
+    """Parse an LLM response (optionally ```json-fenced) into titled sections, or None."""
     try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
+        # json.loads, not the default partial parser: truncated replies must fall back, not lose text.
+        sections = _SECTIONS.validate_python(parse_json_markdown(response_text, parser=json.loads))
+    except (ValueError, TypeError):  # JSONDecodeError and ValidationError are ValueErrors
         return None
-
-    if not isinstance(parsed, list):
-        return None
-
-    for item in parsed:
-        if not isinstance(item, dict):
-            return None
-        if "title" not in item or "content" not in item:
-            return None
-
-    return parsed
+    return [section.model_dump() for section in sections]
 
 
 def semantic_chunk_document(document: Document, llm) -> List[Document]:
@@ -477,12 +449,40 @@ def semantic_chunk_excel_documents(
 # ---------------------------------------------------------------------------
 
 
+def _local_chunk_documents(
+    documents: List[Document], ids: List[str]
+) -> Tuple[List[Document], List[str]]:
+    """Local mode: size-split long PDF/PPT docs, stamp chunk_index on all."""
+    limit = settings.local_chunk_size
+    if limit <= 0:
+        return documents, ids
+
+    chunked: List[Document] = []
+    for doc in documents:
+        # shortcut: Excel rows are detected by a "row" key until every loader stamps file_type.
+        is_excel = doc.metadata.get("file_type") == "excel" or "row" in doc.metadata
+        if is_excel or len(doc.page_content) <= limit:
+            chunked.append(
+                Document(
+                    page_content=doc.page_content,
+                    metadata={**doc.metadata, "chunk_index": 0},
+                    id=doc.id,
+                )
+            )
+        else:
+            chunked.extend(fallback_chunk_document(doc, chunk_size=limit))
+    return chunked, [doc.id for doc in chunked]
+
+
 def chunk_documents(
     documents: List[Document], ids: List[str]
 ) -> Tuple[List[Document], List[str]]:
     """Chunk documents based on CHUNKING_MODE setting.
 
-    If CHUNKING_MODE=local: return documents and ids unchanged.
+    If CHUNKING_MODE=local: Excel rows pass through; PDF/PPT docs longer than
+      LOCAL_CHUNK_SIZE chars are split by the rule-based splitter. Every doc
+      gets a chunk_index (0 = unsplit). LOCAL_CHUNK_SIZE=0 returns the input
+      unchanged.
     If CHUNKING_MODE=hosted: use semantic chunking via LLM with fallback.
       - For Excel: uses classifier_service to determine structured vs unstructured.
         Structured sheets pass through as row-by-row. Unstructured sheets get
@@ -490,7 +490,7 @@ def chunk_documents(
       - For PDF/PPT: always uses semantic chunking (or fallback).
     """
     if settings.use_local_chunking:
-        return documents, ids
+        return _local_chunk_documents(documents, ids)
 
     # Hosted mode: attempt LLM-based semantic chunking
     llm = None
