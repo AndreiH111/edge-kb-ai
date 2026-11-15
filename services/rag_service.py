@@ -5,7 +5,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from core.config import settings
-from services import embed_service
+from services import embed_service, query_service
 
 
 chat_sessions: Dict[str, List[Dict[str, str]]] = {}
@@ -171,10 +171,7 @@ def answer_question(question: str, session_id: str) -> str:
         return answer
 
     chat_history = format_chat_history(history)
-    retrieval_query = (
-        question if not history else f"{chat_history}\nCurrent question: {question}"
-    )
-    context = embed_service.retrieve_from_all_sources(retrieval_query)
+    context = query_service.build_retrieval_documents(question, chat_history, model)
     answer = chain.invoke(
         {
             "chat_history": chat_history,

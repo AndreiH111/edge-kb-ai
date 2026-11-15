@@ -255,6 +255,8 @@ class Settings:
         "MAX_CHAT_HISTORY_CONTENT_CHARS",
         2000,
     )
+    query_rewrite_enabled: bool = _env_bool("QUERY_REWRITE_ENABLED", True)
+    multi_query_count: int = _env_int("MULTI_QUERY_COUNT", 1)
 
     # ---- Agentic chat + Jira via MCP ----
     agent_enabled: bool = _env_bool("AGENT_ENABLED", True)

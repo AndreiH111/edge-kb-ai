@@ -15,6 +15,7 @@ A FastAPI-based retrieval-augmented generation (RAG) application. Upload documen
 - **Multiple vector stores** — ChromaDB (local/HTTP) or SAP HANA Cloud
 - **Multiple storage backends** — Local filesystem or AWS S3
 - **Session-based chat** — Follow-up questions use conversation history
+- **History-aware retrieval** — Follow-ups are rewritten into standalone search questions before retrieval, with optional multi-query expansion (`QUERY_REWRITE_ENABLED`, `MULTI_QUERY_COUNT`)
 - **Source-aware retrieval** — Retrieves relevant context across all indexed files
 - **Agentic chat** — The LLM decides which tools to call (search the knowledge base, or query Jira read-only via an MCP server) instead of a fixed retrieve-then-answer flow, with automatic fallback to the classic RAG chain
 - **Streaming (SSE)** — `POST /ai/chat/stream` streams replies token-by-token as Server-Sent Events (`tool`, `token`, `done`, `error`)

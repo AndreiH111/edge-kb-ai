@@ -120,6 +120,8 @@ Tuning parameters for the retrieval pipeline and chat session memory.
 | `RETRIEVER_K` | `5` | Documents retrieved per query when the question doesn't name a file (one search across all files) |
 | `RETRIEVER_MAX_FILE_CHARS` | `12000` | When the question names file(s) whose combined text is at most this many characters, the whole file(s) are sent to the LLM (complete answers for small spreadsheets). Lower it for low token-rate tiers |
 | `RETRIEVER_K_PER_SOURCE` | `3` | Documents retrieved from each named file when the named files are too large to send whole |
+| `QUERY_REWRITE_ENABLED` | `true` | On the classic RAG path, rewrite a follow-up question plus the chat history into one standalone retrieval question with the LLM (the first question of a session is never rewritten). `false` (or a failed rewrite) keeps the previous behaviour: chat history and question are searched together |
+| `MULTI_QUERY_COUNT` | `1` | Total retrieval queries per question: the (rewritten) question plus up to `N-1` LLM paraphrases; results are unioned and de-duplicated. `1` disables paraphrasing. Each extra query adds one LLM call and can grow the retrieved context up to N times |
 | `MAX_CHAT_HISTORY_MESSAGES` | `12` | Messages retained per chat session |
 | `MAX_CHAT_HISTORY_CONTENT_CHARS` | `2000` | Max characters kept per history message |
 
