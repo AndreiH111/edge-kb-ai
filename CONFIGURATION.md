@@ -137,6 +137,8 @@ Tuning parameters for the retrieval pipeline and chat session memory.
 | `RETRIEVER_MMR_FETCH_K` | `20` | Candidates fetched before MMR re-ranking (`mmr` only; never less than the requested `k`) |
 | `RETRIEVER_MMR_LAMBDA` | `0.5` | MMR relevance/diversity trade-off, `0` = max diversity, `1` = pure relevance (`mmr` only) |
 | `RETRIEVER_SCORE_THRESHOLD` | — | Unset = off. Keep only chunks whose relevance score is at least this value (`similarity` only). Chroma-only; see the Vector Store section before enabling |
+| `HYBRID_SEARCH_ENABLED` | `true` | Fuse a stdlib BM25 lexical ranking of the in-memory corpus with the vector search (reciprocal rank fusion) so exact codes and rare words rank first. `false` restores pure vector search |
+| `HYBRID_CANDIDATES` | `20` | Candidates fetched from each of BM25 and the vector store before fusion; the top `RETRIEVER_K` / `RETRIEVER_K_PER_SOURCE` of the fused list are returned |
 | `MAX_CHAT_HISTORY_MESSAGES` | `12` | Messages retained per chat session |
 | `MAX_CHAT_HISTORY_CONTENT_CHARS` | `2000` | Max characters kept per history message |
 

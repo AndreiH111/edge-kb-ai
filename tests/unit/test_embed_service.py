@@ -54,7 +54,7 @@ class RetrieveFromAllSourcesTests(unittest.TestCase):
 
         self.module.retrieve_from_all_sources(query)
 
-        self.store.similarity_search.assert_called_once_with(query, k=self.module.settings.retriever_k)
+        self.store.similarity_search.assert_called_once_with(query, k=self.module.settings.hybrid_candidates)
 
     def test_small_named_file_is_returned_whole(self) -> None:
         internships = [_doc("Internships_2024.xlsx", f"row {index}") for index in range(3)]
@@ -74,9 +74,34 @@ class RetrieveFromAllSourcesTests(unittest.TestCase):
 
         self.store.similarity_search.assert_called_once_with(
             "Which internships are remote?",
-            k=tight.retriever_k_per_source,
+            k=tight.hybrid_candidates,
             filter={"source": "Internships_2024.xlsx"},
         )
+
+    def test_global_search_fuses_bm25_and_vector_results(self) -> None:
+        doc_a = _doc("a.pdf", "unrelated vector hit")
+        doc_b = _doc("b.pdf", "habitat notes")
+        doc_c = _doc("c.pdf", "quokka habitat on the island")
+        self.module.documents = [doc_b, doc_c]
+        self.store.similarity_search.return_value = [doc_a, doc_b]
+
+        result = self.module.retrieve_from_all_sources("quokka habitat")
+
+        # B is in both rankings so it fuses highest; C (BM25 only) and A (vector only) follow.
+        self.assertEqual(result[0], doc_b)
+        self.assertCountEqual(result[1:], [doc_a, doc_c])
+
+    def test_hybrid_disabled_returns_vector_results_untouched(self) -> None:
+        doc_a, doc_b = _doc("a.pdf", "first"), _doc("b.pdf", "second")
+        self.module.documents = [doc_b, _doc("c.pdf", "quokka")]
+        self.store.similarity_search.return_value = [doc_a, doc_b]
+        classic = dataclasses.replace(self.module.settings, hybrid_search_enabled=False)
+
+        with patch.object(self.module, "settings", classic):
+            result = self.module.retrieve_from_all_sources("quokka")
+
+        self.assertEqual(result, [doc_a, doc_b])
+        self.store.similarity_search.assert_called_once_with("quokka", k=classic.retriever_k)
 
 
 if __name__ == "__main__":

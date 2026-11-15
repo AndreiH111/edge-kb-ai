@@ -1,11 +1,12 @@
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from langchain_core.documents import Document
 
 from core.config import settings
 from services import document_service
+from services.bm25_service import fuse_rrf, get_index
 from services.chunking_service import chunk_documents
 from services.excel_service import is_supported_excel_file, load_excel_documents, load_excel_file
 from services.file_service import get_supported_files, sync_storage_to_local
@@ -219,13 +220,24 @@ def get_sources_matching_query(query: str) -> List[str]:
     return matched_sources
 
 
+def _search(query: str, k: int, source: Optional[str] = None) -> List[Document]:
+    """Top-``k`` for ``query``: vector search, fused with BM25 over ``documents`` when hybrid is on."""
+    kwargs = {"filter": {"source": source}} if source else {}
+    if not settings.hybrid_search_enabled:
+        return vector_store.similarity_search(query, k=k, **kwargs)
+    fetch = max(k, settings.hybrid_candidates)
+    lexical = get_index(documents).search(query, fetch, source=source)
+    semantic = vector_store.similarity_search(query, k=fetch, **kwargs)
+    return fuse_rrf([lexical, semantic])[:k]
+
+
 def retrieve_from_all_sources(query: str) -> List[Document]:
     if not documents:
         return []
 
     matched_sources = get_sources_matching_query(query)
     if not matched_sources:
-        return vector_store.similarity_search(query, k=settings.retriever_k)
+        return _search(query, settings.retriever_k)
 
     # Small named files go in whole so filtered questions ("which internships
     # are remote?") see every row; the character budget keeps the prompt bounded.
@@ -240,9 +252,7 @@ def retrieve_from_all_sources(query: str) -> List[Document]:
     return [
         document
         for source in matched_sources
-        for document in vector_store.similarity_search(
-            query, k=settings.retriever_k_per_source, filter={"source": source}
-        )
+        for document in _search(query, settings.retriever_k_per_source, source)
     ]
 
 

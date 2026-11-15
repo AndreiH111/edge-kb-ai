@@ -16,6 +16,7 @@ A FastAPI-based retrieval-augmented generation (RAG) application. Upload documen
 - **Multiple storage backends** — Local filesystem or AWS S3
 - **Session-based chat** — Follow-up questions use conversation history
 - **Source-aware retrieval** — Retrieves relevant context across all indexed files
+- **Hybrid search** — BM25 lexical ranking fused with vector similarity (reciprocal rank fusion), so exact identifiers and rare terms are not lost to embeddings
 - **Agentic chat** — The LLM decides which tools to call (search the knowledge base, or query Jira read-only via an MCP server) instead of a fixed retrieve-then-answer flow, with automatic fallback to the classic RAG chain
 - **Streaming (SSE)** — `POST /ai/chat/stream` streams replies token-by-token as Server-Sent Events (`tool`, `token`, `done`, `error`)
 

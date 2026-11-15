@@ -261,6 +261,8 @@ class Settings:
         if os.getenv("RETRIEVER_SCORE_THRESHOLD", "").strip()
         else None
     )
+    hybrid_search_enabled: bool = _env_bool("HYBRID_SEARCH_ENABLED", True)
+    hybrid_candidates: int = _env_int("HYBRID_CANDIDATES", 20)
     max_chat_history_messages: int = _env_int("MAX_CHAT_HISTORY_MESSAGES", 12)
     max_chat_history_content_chars: int = _env_int(
         "MAX_CHAT_HISTORY_CONTENT_CHARS",
