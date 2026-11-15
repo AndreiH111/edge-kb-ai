@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import FrozenSet
+from typing import FrozenSet, Optional
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -251,6 +251,16 @@ class Settings:
     retriever_k: int = _env_int("RETRIEVER_K", 5)
     retriever_k_per_source: int = _env_int("RETRIEVER_K_PER_SOURCE", 3)
     retriever_max_file_chars: int = _env_int("RETRIEVER_MAX_FILE_CHARS", 12000)
+    retriever_search_type: str = (
+        os.getenv("RETRIEVER_SEARCH_TYPE", "similarity").strip().lower()
+    )
+    retriever_mmr_fetch_k: int = _env_int("RETRIEVER_MMR_FETCH_K", 20)
+    retriever_mmr_lambda: float = float(os.getenv("RETRIEVER_MMR_LAMBDA", "0.5"))
+    retriever_score_threshold: Optional[float] = (
+        float(os.environ["RETRIEVER_SCORE_THRESHOLD"])
+        if os.getenv("RETRIEVER_SCORE_THRESHOLD", "").strip()
+        else None
+    )
     max_chat_history_messages: int = _env_int("MAX_CHAT_HISTORY_MESSAGES", 12)
     max_chat_history_content_chars: int = _env_int(
         "MAX_CHAT_HISTORY_CONTENT_CHARS",

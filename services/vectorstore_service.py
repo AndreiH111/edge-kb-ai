@@ -1,9 +1,20 @@
 import json
+import logging
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from langchain_core.documents import Document
 
 from core.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _mmr_kwargs(k: int) -> Dict[str, Any]:
+    """MMR arguments from settings; fetch_k can never be smaller than k."""
+    return {
+        "fetch_k": max(settings.retriever_mmr_fetch_k, k),
+        "lambda_mult": settings.retriever_mmr_lambda,
+    }
 
 
 @runtime_checkable
@@ -72,6 +83,19 @@ class ChromaVectorStore:
         kwargs: Dict[str, Any] = {"k": k}
         if filter:
             kwargs["filter"] = filter
+        if settings.retriever_search_type == "mmr":
+            return self._store.max_marginal_relevance_search(
+                query, **_mmr_kwargs(k), **kwargs
+            )
+        threshold = settings.retriever_score_threshold
+        if threshold is not None:
+            # shortcut: relevance is only in [0, 1] for unit-normed embeddings on
+            # Chroma's default l2 collection; pass collection_metadata={"hnsw:space": "cosine"}
+            # when the collection is created if a fixed threshold is wanted.
+            hits = self._store.similarity_search_with_relevance_scores(
+                query, score_threshold=threshold, **kwargs
+            )
+            return [doc for doc, _ in hits]
         return self._store.similarity_search(query, **kwargs)
 
     def delete_by_ids(self, ids: List[str]) -> None:
@@ -111,6 +135,7 @@ class HanaVectorStore:
         self._table_name = table_name
         self._connection = None
         self._store = None
+        self._warned_unsupported_search = False
 
     @property
     def store(self):
@@ -149,7 +174,7 @@ class HanaVectorStore:
         )
 
     def add_documents(self, documents: List[Document], ids: List[str]) -> None:
-        self.store.add_documents(documents)
+        self.store.add_documents(documents, ids=ids)
 
     def similarity_search(
         self,
@@ -160,11 +185,29 @@ class HanaVectorStore:
         kwargs: Dict[str, Any] = {"k": k}
         if filter:
             kwargs["filter"] = filter
+        mmr = settings.retriever_search_type == "mmr"
+        if mmr:
+            try:
+                return self.store.max_marginal_relevance_search(
+                    query, **_mmr_kwargs(k), **kwargs
+                )
+            except NotImplementedError:  # base VectorStore stub when langchain-hana lacks MMR
+                pass
+        if (mmr or settings.retriever_score_threshold is not None) and (
+            not self._warned_unsupported_search
+        ):
+            self._warned_unsupported_search = True
+            logger.warning(
+                "HANA backend: RETRIEVER_SEARCH_TYPE=mmr needs HanaDB.max_marginal_relevance_search "
+                "and RETRIEVER_SCORE_THRESHOLD is not supported; using plain similarity search."
+            )
         return self.store.similarity_search(query, **kwargs)
 
     def delete_by_ids(self, ids: List[str]) -> None:
-        if ids:
-            self.store.delete(ids=ids)
+        # HanaDB.delete only supports filter=; every id is "<source>:..." and callers remove whole files.
+        # shortcut: a filename containing ":" is split wrongly; pass the filename in if that matters.
+        for source in dict.fromkeys(doc_id.split(":", 1)[0] for doc_id in ids):
+            self.store.delete(filter={"source": source})
 
     def reset_collection(self) -> None:
         self.store.delete(filter={})

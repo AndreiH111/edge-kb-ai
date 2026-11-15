@@ -154,7 +154,8 @@ def initialize_on_startup() -> int:
     sync_storage_to_local()
 
     try:
-        results = vector_store.similarity_search("test", k=1)
+        # Plain retriever, not similarity_search: RETRIEVER_SCORE_THRESHOLD must not hide existing data.
+        results = vector_store.as_retriever(search_kwargs={"k": 1}).invoke("test")
         has_data = len(results) > 0
     except Exception:
         has_data = False

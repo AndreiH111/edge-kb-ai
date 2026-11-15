@@ -1,6 +1,6 @@
 import unittest
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from langchain_core.documents import Document
 
@@ -324,7 +324,7 @@ class HanaVectorStoreTests(unittest.TestCase):
         ):
             store.add_documents(docs, ids=["id1"])
 
-        mock_hana_instance.add_documents.assert_called_once_with(docs)
+        mock_hana_instance.add_documents.assert_called_once_with(docs, ids=["id1"])
 
     def test_similarity_search_delegates(self) -> None:
         mock_dbapi = MagicMock()
@@ -377,9 +377,13 @@ class HanaVectorStoreTests(unittest.TestCase):
             "sys.modules",
             {"hdbcli": MagicMock(dbapi=mock_dbapi), "hdbcli.dbapi": mock_dbapi, "langchain_hana": mock_hana_module},
         ):
-            store.delete_by_ids(["id1", "id2"])
+            store.delete_by_ids(["a.pdf:page:1", "a.pdf:page:2", "b.xlsx:Data:3"])
 
-        mock_hana_instance.delete.assert_called_once_with(ids=["id1", "id2"])
+        # HanaDB.delete has no ids= support: one filtered delete per source file.
+        self.assertEqual(
+            mock_hana_instance.delete.call_args_list,
+            [call(filter={"source": "a.pdf"}), call(filter={"source": "b.xlsx"})],
+        )
 
     def test_delete_by_ids_empty_list_does_nothing(self) -> None:
         mock_dbapi = MagicMock()
@@ -404,6 +408,57 @@ class HanaVectorStoreTests(unittest.TestCase):
             store.delete_by_ids([])
 
         mock_hana_instance.delete.assert_not_called()
+
+
+def _search_settings(search_type="similarity", threshold=None) -> MagicMock:
+    return MagicMock(
+        retriever_search_type=search_type,
+        retriever_mmr_fetch_k=20,
+        retriever_mmr_lambda=0.5,
+        retriever_score_threshold=threshold,
+    )
+
+
+class SearchOptionsTests(unittest.TestCase):
+    """RETRIEVER_SEARCH_TYPE / RETRIEVER_SCORE_THRESHOLD routing inside the wrappers."""
+
+    @patch("langchain_chroma.Chroma")
+    def test_chroma_mmr_and_threshold(self, mock_chroma_class) -> None:
+        inner = mock_chroma_class.return_value
+        store = ChromaVectorStore("test", MagicMock(), persist_directory="/tmp/test")
+        doc = Document(page_content="hit")
+
+        with patch("services.vectorstore_service.settings", _search_settings("mmr")):
+            store.similarity_search("q", k=30, filter={"source": "a.pdf"})
+        inner.max_marginal_relevance_search.assert_called_once_with(
+            "q", fetch_k=30, lambda_mult=0.5, k=30, filter={"source": "a.pdf"}
+        )
+
+        inner.similarity_search_with_relevance_scores.return_value = [(doc, 0.9)]
+        with patch("services.vectorstore_service.settings", _search_settings(threshold=0.4)):
+            self.assertEqual(store.similarity_search("q", k=3), [doc])
+        inner.similarity_search_with_relevance_scores.assert_called_once_with(
+            "q", score_threshold=0.4, k=3
+        )
+        inner.similarity_search.assert_not_called()
+
+    def test_hana_mmr_and_unsupported_fallback(self) -> None:
+        store = HanaVectorStore(MagicMock(), "hana.example.com", 443, "user", "pass")
+        store._store = MagicMock()
+        with patch("services.vectorstore_service.settings", _search_settings("mmr")):
+            store.similarity_search("q", k=2)
+        store._store.max_marginal_relevance_search.assert_called_once_with(
+            "q", fetch_k=20, lambda_mult=0.5, k=2
+        )
+
+        store._store = MagicMock()
+        store._store.max_marginal_relevance_search.side_effect = NotImplementedError
+        with patch("services.vectorstore_service.settings", _search_settings("mmr")), \
+                self.assertLogs("services.vectorstore_service", "WARNING") as logs:
+            store.similarity_search("q", k=2)
+            store.similarity_search("q", k=2)
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(store._store.similarity_search.call_count, 2)
 
 
 class BuildVectorStoreTests(unittest.TestCase):
