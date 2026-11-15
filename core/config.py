@@ -1,275 +1,205 @@
-import os
-from dataclasses import dataclass
+"""Application settings: one pydantic-settings field per environment variable.
+
+To add a setting, add one field named as its env var lowercased, e.g.
+``chroma_port: int = 8000`` reads ``CHROMA_PORT``. Legacy or alternative names go
+in ``Field(validation_alias=AliasChoices("NEW_NAME", "OLD_NAME"))``; the first
+non-blank one wins. Malformed values (a non-integer port, an unknown mode) raise
+a ``ValidationError`` when this module is imported.
+"""
+
 from pathlib import Path
-from typing import FrozenSet
+from typing import ClassVar, FrozenSet
+
+from dotenv import load_dotenv
+from pydantic import AliasChoices, Field, ValidationInfo, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Keep local development predictable: values in .env should win.
+load_dotenv(BASE_DIR / ".env", override=True)
 
-def _load_env_file() -> None:
-    try:
-        from dotenv import load_dotenv
-
-        # Keep local development predictable: values in .env should win.
-        load_dotenv(BASE_DIR / ".env", override=True)
-        return
-    except ModuleNotFoundError:
-        pass
-
-    env_path = BASE_DIR / ".env"
-    if not env_path.exists():
-        return
-
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-
-        key, value = line.split("=", 1)
-        os.environ[key.strip()] = value.strip().strip("\"'")
+_MODES = {
+    "local": "local",
+    "ollama": "local",
+    "custom": "custom",
+    "hash": "custom",
+    "hosted": "hosted",
+    "remote": "hosted",
+}
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
+class Settings(BaseSettings):
+    """Frozen, env-backed settings. Blank env values count as unset."""
 
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    model_config = SettingsConfigDict(frozen=True, extra="ignore", env_ignore_empty=True)
 
+    base_dir: ClassVar[Path] = BASE_DIR
+    db_location: ClassVar[Path] = BASE_DIR / "chrome_langchain_db"
+    collection_name: ClassVar[str] = "uploaded_files"
+    supported_excel_extensions: ClassVar[FrozenSet[str]] = frozenset({".xlsx", ".xls", ".xlsm"})
+    supported_pdf_extensions: ClassVar[FrozenSet[str]] = frozenset({".pdf"})
+    supported_powerpoint_extensions: ClassVar[FrozenSet[str]] = frozenset({".pptx", ".pptm"})
 
-def _env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    if value is None:
-        return default
-
-    try:
-        return int(value)
-    except ValueError:
-        return default
-
-
-def _first_env_int(*names: str, default: int) -> int:
-    for name in names:
-        value = os.getenv(name)
-        if value is None:
-            continue
-
-        try:
-            return int(value)
-        except ValueError:
-            return default
-
-    return default
-
-
-def _env_path(name: str, default: Path) -> Path:
-    value = os.getenv(name)
-    if not value:
-        return default
-
-    path = Path(value).expanduser()
-    if path.is_absolute():
-        return path
-
-    return BASE_DIR / path
-
-
-def _first_env_value(*names: str, default: str = "") -> str:
-    for name in names:
-        value = os.getenv(name)
-        if value:
-            return value
-
-    return default
-
-
-def _env_local_or_hosted_mode(name: str, default: str) -> str:
-    value = os.getenv(name, default)
-    normalized = value.strip().lower()
-    if normalized in {"local", "ollama"}:
-        return "local"
-    if normalized in {"custom", "hash"}:
-        return "custom"
-    if normalized in {"hosted", "remote"}:
-        return "hosted"
-
-    raise ValueError(f"{name} must be either 'local', 'custom', or 'hosted'")
-
-
-def _env_llm_mode() -> str:
-    value = os.getenv("LLM_MODE")
-    if value:
-        return _env_local_or_hosted_mode("LLM_MODE", value)
-
-    # Backward compatibility for existing .env files. Historically this meant
-    # "use the local Ollama model" when true, despite the confusing name.
-    return "local" if _env_bool("LOCAL_LLM_HOSTED", True) else "hosted"
-
-
-def _env_chunking_mode(llm_mode: str) -> str:
-    return _env_local_or_hosted_mode("CHUNKING_MODE", llm_mode)
-
-
-def _env_embedding_mode() -> str:
-    value = os.getenv("EMBEDDING_MODE")
-    if value:
-        return _env_local_or_hosted_mode("EMBEDDING_MODE", value)
-
-    provider = os.getenv("HOSTED_EMBEDDING_PROVIDER", "").strip().lower()
-    if provider and provider not in {"local", "hash"}:
-        return "hosted"
-
-    return "local"
-
-
-def _env_hosted_embedding_provider() -> str:
-    provider = os.getenv("HOSTED_EMBEDDING_PROVIDER", "openai").strip().lower()
-    if provider in {"", "hosted"}:
-        return "openai"
-
-    return provider
-
-
-_load_env_file()
-
-
-@dataclass(frozen=True)
-class Settings:
-    base_dir: Path = BASE_DIR
-    data_dir: Path = _env_path("DATA_DIR", BASE_DIR / "data")
-    storage_backend: str = os.getenv("FILE_STORAGE_BACKEND", "local").strip().lower()
-    storage_cache_dir: Path = _env_path(
-        "STORAGE_CACHE_DIR",
-        BASE_DIR / ".storage_cache",
+    data_dir: Path = BASE_DIR / "data"
+    storage_backend: str = Field("local", validation_alias=AliasChoices("FILE_STORAGE_BACKEND"))
+    storage_cache_dir: Path = BASE_DIR / ".storage_cache"
+    aws_s3_bucket: str = Field("", validation_alias=AliasChoices("AWS_S3_BUCKET", "S3_BUCKET_NAME"))
+    aws_s3_prefix: str = Field("", validation_alias=AliasChoices("AWS_S3_PREFIX", "S3_PREFIX"))
+    aws_s3_region_name: str = Field(
+        "",
+        validation_alias=AliasChoices("AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"),
     )
-    aws_s3_bucket: str = os.getenv("AWS_S3_BUCKET", os.getenv("S3_BUCKET_NAME", ""))
-    aws_s3_prefix: str = os.getenv("AWS_S3_PREFIX", os.getenv("S3_PREFIX", "")).strip("/")
-    aws_s3_region_name: str = _first_env_value(
-        "AWS_REGION_NAME",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-    )
-    aws_s3_endpoint_url: str = os.getenv("AWS_S3_ENDPOINT_URL", "")
-    db_location: Path = BASE_DIR / "chrome_langchain_db"
-    collection_name: str = "uploaded_files"
-    supported_excel_extensions: FrozenSet[str] = frozenset({".xlsx", ".xls", ".xlsm"})
-    supported_pdf_extensions: FrozenSet[str] = frozenset({".pdf"})
-    supported_powerpoint_extensions: FrozenSet[str] = frozenset({".pptx", ".pptm"})
+    aws_s3_endpoint_url: str = ""
 
-    llm_mode: str = _env_llm_mode()
-    ollama_llm_model: str = os.getenv("OLLAMA_LLM_MODEL", "gemma4")
-    hosted_llm_provider: str = (
-        os.getenv("HOSTED_LLM_PROVIDER", "openai").strip().lower()
+    # "" means unset; resolved in _resolve_defaults (legacy LOCAL_LLM_HOSTED fallback).
+    llm_mode: str = ""
+    # Legacy: historically meant "use the local Ollama model" when true.
+    legacy_local_llm_hosted: bool = Field(True, validation_alias=AliasChoices("LOCAL_LLM_HOSTED"))
+    ollama_llm_model: str = "gemma4"
+    hosted_llm_provider: str = "openai"
+    hosted_llm_model: str = "gpt-4o-mini"
+    hosted_llm_api_key: str = Field(
+        "",
+        validation_alias=AliasChoices("HOSTED_LLM_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY"),
     )
-    hosted_llm_model: str = os.getenv("HOSTED_LLM_MODEL", "gpt-4o-mini")
-    hosted_llm_api_key: str = _first_env_value(
-        "HOSTED_LLM_API_KEY",
-        "GROQ_API_KEY",
-        "OPENAI_API_KEY",
-    )
-    hosted_llm_base_url: str = os.getenv("HOSTED_LLM_BASE_URL", "")
-    hosted_llm_temperature: float = float(os.getenv("HOSTED_LLM_TEMPERATURE", "1"))
-    hosted_llm_top_p: float = float(os.getenv("HOSTED_LLM_TOP_P", "1"))
-    hosted_llm_max_tokens: int = _env_int("HOSTED_LLM_MAX_TOKENS", 2048)
-    groq_reasoning_effort: str = os.getenv("GROQ_REASONING_EFFORT", "medium")
+    hosted_llm_base_url: str = ""
+    hosted_llm_temperature: float = 1.0
+    hosted_llm_top_p: float = 1.0
+    hosted_llm_max_tokens: int = 2048
+    groq_reasoning_effort: str = "medium"
 
-    chunking_mode: str = _env_chunking_mode(llm_mode)
-    ollama_chunking_model: str = os.getenv(
-        "OLLAMA_CHUNKING_MODEL",
-        os.getenv("OLLAMA_LLM_MODEL", "gemma4"),
+    # "" means unset; defaults to llm_mode.
+    chunking_mode: str = ""
+    ollama_chunking_model: str = Field(
+        "gemma4",
+        validation_alias=AliasChoices("OLLAMA_CHUNKING_MODEL", "OLLAMA_LLM_MODEL"),
     )
-    hosted_chunking_provider: str = _first_env_value(
-        "HOSTED_CHUNKING_PROVIDER",
-        "HOSTED_LLM_CHUNKING_PROVIDER",
-        default="openai",
-    ).strip().lower()
-    hosted_chunking_model: str = _first_env_value(
-        "HOSTED_CHUNKING_MODEL",
-        "HOSTED_LLM_CHUNKING_MODEL",
-        default="gpt-4o-mini",
+    hosted_chunking_provider: str = Field(
+        "openai",
+        validation_alias=AliasChoices("HOSTED_CHUNKING_PROVIDER", "HOSTED_LLM_CHUNKING_PROVIDER"),
     )
-    hosted_chunking_api_key: str = _first_env_value(
-        "HOSTED_CHUNKING_API_KEY",
-        "HOSTED_LLM_CHUNKING_API_KEY",
-        "OPENAI_API_KEY",
+    hosted_chunking_model: str = Field(
+        "gpt-4o-mini",
+        validation_alias=AliasChoices("HOSTED_CHUNKING_MODEL", "HOSTED_LLM_CHUNKING_MODEL"),
     )
-    hosted_chunking_base_url: str = _first_env_value(
-        "HOSTED_CHUNKING_BASE_URL",
-        "HOSTED_LLM_CHUNKING_BASE_URL",
+    hosted_chunking_api_key: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "HOSTED_CHUNKING_API_KEY", "HOSTED_LLM_CHUNKING_API_KEY", "OPENAI_API_KEY"
+        ),
     )
-    hosted_chunking_temperature: float = float(
-        _first_env_value(
-            "HOSTED_CHUNKING_TEMPERATURE",
-            "HOSTED_LLM_CHUNKING_TEMPERATURE",
-            default="1",
-        )
+    hosted_chunking_base_url: str = Field(
+        "",
+        validation_alias=AliasChoices("HOSTED_CHUNKING_BASE_URL", "HOSTED_LLM_CHUNKING_BASE_URL"),
     )
-    hosted_chunking_top_p: float = float(
-        _first_env_value(
-            "HOSTED_CHUNKING_TOP_P",
-            "HOSTED_LLM_CHUNKING_TOP_P",
-            default="1",
-        )
+    hosted_chunking_temperature: float = Field(
+        1.0,
+        validation_alias=AliasChoices(
+            "HOSTED_CHUNKING_TEMPERATURE", "HOSTED_LLM_CHUNKING_TEMPERATURE"
+        ),
     )
-    hosted_chunking_max_tokens: int = _first_env_int(
-        "HOSTED_CHUNKING_MAX_TOKENS",
-        "HOSTED_LLM_CHUNKING_MAX_TOKENS",
-        default=2048,
+    hosted_chunking_top_p: float = Field(
+        1.0,
+        validation_alias=AliasChoices("HOSTED_CHUNKING_TOP_P", "HOSTED_LLM_CHUNKING_TOP_P"),
+    )
+    hosted_chunking_max_tokens: int = Field(
+        2048,
+        validation_alias=AliasChoices(
+            "HOSTED_CHUNKING_MAX_TOKENS", "HOSTED_LLM_CHUNKING_MAX_TOKENS"
+        ),
     )
 
-    embedding_mode: str = _env_embedding_mode()
-    ollama_embedding_model: str = os.getenv(
-        "OLLAMA_EMBEDDING_MODEL",
-        os.getenv("EMBEDDING_MODEL", "nomic-embed-text"),
+    # "" means unset; inferred from hosted_embedding_provider.
+    embedding_mode: str = ""
+    ollama_embedding_model: str = Field(
+        "nomic-embed-text",
+        validation_alias=AliasChoices("OLLAMA_EMBEDDING_MODEL", "EMBEDDING_MODEL"),
     )
-    hosted_embedding_provider: str = _env_hosted_embedding_provider()
-    hosted_embedding_model: str = os.getenv(
-        "HOSTED_EMBEDDING_MODEL",
-        "text-embedding-3-small",
+    # "" means unset; normalised to "openai" after embedding_mode is inferred.
+    hosted_embedding_provider: str = ""
+    hosted_embedding_model: str = "text-embedding-3-small"
+    hosted_embedding_api_key: str = Field(
+        "",
+        validation_alias=AliasChoices("HOSTED_EMBEDDING_API_KEY", "OPENAI_API_KEY"),
     )
-    hosted_embedding_api_key: str = _first_env_value(
-        "HOSTED_EMBEDDING_API_KEY",
-        "OPENAI_API_KEY",
-    )
-    hosted_embedding_base_url: str = os.getenv("HOSTED_EMBEDDING_BASE_URL", "")
-    local_embedding_dimensions: int = _env_int("LOCAL_EMBEDDING_DIMENSIONS", 384)
+    hosted_embedding_base_url: str = ""
+    local_embedding_dimensions: int = 384
 
-    vector_db_backend: str = os.getenv("VECTOR_DB_BACKEND", "chroma").strip().lower()
-    chroma_mode: str = os.getenv("CHROMA_MODE", "local").strip().lower()
-    chroma_host: str = os.getenv("CHROMA_HOST", "localhost")
-    chroma_port: int = _env_int("CHROMA_PORT", 8000)
-    chroma_ssl: bool = _env_bool("CHROMA_SSL", False)
-    chroma_headers: str = os.getenv("CHROMA_HEADERS", "")
-    hana_db_address: str = os.getenv("HANA_DB_ADDRESS", "")
-    hana_db_port: int = _env_int("HANA_DB_PORT", 443)
-    hana_db_user: str = os.getenv("HANA_DB_USER", "")
-    hana_db_password: str = os.getenv("HANA_DB_PASSWORD", "")
-    hana_db_table_name: str = os.getenv("HANA_DB_TABLE_NAME", "LANGCHAIN_VECTORS")
+    vector_db_backend: str = "chroma"
+    chroma_mode: str = "local"
+    chroma_host: str = "localhost"
+    chroma_port: int = 8000
+    chroma_ssl: bool = False
+    chroma_headers: str = ""
+    hana_db_address: str = ""
+    hana_db_port: int = 443
+    hana_db_user: str = ""
+    hana_db_password: str = ""
+    hana_db_table_name: str = "LANGCHAIN_VECTORS"
 
-    retriever_k: int = _env_int("RETRIEVER_K", 5)
-    retriever_k_per_source: int = _env_int("RETRIEVER_K_PER_SOURCE", 3)
-    retriever_max_file_chars: int = _env_int("RETRIEVER_MAX_FILE_CHARS", 12000)
-    max_chat_history_messages: int = _env_int("MAX_CHAT_HISTORY_MESSAGES", 12)
-    max_chat_history_content_chars: int = _env_int(
-        "MAX_CHAT_HISTORY_CONTENT_CHARS",
-        2000,
-    )
+    retriever_k: int = 5
+    retriever_k_per_source: int = 3
+    retriever_max_file_chars: int = 12000
+    max_chat_history_messages: int = 12
+    max_chat_history_content_chars: int = 2000
 
     # ---- Agentic chat + Jira via MCP ----
-    agent_enabled: bool = _env_bool("AGENT_ENABLED", True)
-    jira_enabled: bool = _env_bool("JIRA_ENABLED", False)
-    jira_url: str = os.getenv("JIRA_URL", "")
-    jira_username: str = os.getenv("JIRA_USERNAME", "")
-    jira_api_token: str = _first_env_value("JIRA_API_TOKEN", default="")
-    jira_read_only: bool = _env_bool("JIRA_READ_ONLY", True)
+    agent_enabled: bool = True
+    jira_enabled: bool = False
+    jira_url: str = ""
+    jira_username: str = ""
+    jira_api_token: str = ""
+    jira_read_only: bool = True
     # Optional comma-separated allow-list passed to the MCP server as ENABLED_TOOLS.
-    jira_enabled_tools: str = os.getenv("JIRA_ENABLED_TOOLS", "")
+    jira_enabled_tools: str = ""
     # Transport for the Jira MCP server: "stdio" (spawn a subprocess) or
     # "streamable_http" (connect to an already-running server at jira_mcp_url).
-    jira_mcp_transport: str = os.getenv("JIRA_MCP_TRANSPORT", "stdio")
-    jira_mcp_command: str = os.getenv("JIRA_MCP_COMMAND", "mcp-atlassian")
-    jira_mcp_url: str = os.getenv("JIRA_MCP_URL", "")
+    jira_mcp_transport: str = "stdio"
+    jira_mcp_command: str = "mcp-atlassian"
+    jira_mcp_url: str = ""
+
+    @field_validator(
+        "storage_backend",
+        "hosted_llm_provider",
+        "hosted_chunking_provider",
+        "hosted_embedding_provider",
+        "vector_db_backend",
+        "chroma_mode",
+    )
+    @classmethod
+    def _normalise_name(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("llm_mode", "chunking_mode", "embedding_mode")
+    @classmethod
+    def _normalise_mode(cls, value: str, info: ValidationInfo) -> str:
+        if not value:
+            return value
+        try:
+            return _MODES[value.strip().lower()]
+        except KeyError as exc:
+            name = str(info.field_name).upper()
+            raise ValueError(f"{name} must be either 'local', 'custom', or 'hosted'") from exc
+
+    @model_validator(mode="after")
+    def _resolve_defaults(self) -> "Settings":
+        """Fill cross-field defaults; writes __dict__ because the model is frozen."""
+        resolved = self.__dict__
+        resolved["llm_mode"] = self.llm_mode or (
+            "local" if self.legacy_local_llm_hosted else "hosted"
+        )
+        resolved["chunking_mode"] = self.chunking_mode or self.llm_mode
+        provider = self.hosted_embedding_provider
+        resolved["embedding_mode"] = self.embedding_mode or (
+            "hosted" if provider not in {"", "local", "hash"} else "local"
+        )
+        resolved["hosted_embedding_provider"] = "openai" if provider in {"", "hosted"} else provider
+        resolved["data_dir"] = BASE_DIR / self.data_dir.expanduser()
+        resolved["storage_cache_dir"] = BASE_DIR / self.storage_cache_dir.expanduser()
+        resolved["aws_s3_prefix"] = self.aws_s3_prefix.strip("/")
+        return self
 
     @property
     def use_local_llm(self) -> bool:

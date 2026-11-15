@@ -6,6 +6,8 @@ All settings are loaded from a `.env` file in the project root. Copy `.env.examp
 cp .env.example .env
 ```
 
+Values in `.env` override variables already exported in the shell. Blank values (`NAME=`) count as unset, so the default or the next legacy name applies. Settings are validated when the app starts: a malformed value (e.g. `CHROMA_PORT=notanint`, `LLM_MODE=cloud`, `CHROMA_SSL=maybe`) stops startup with a pydantic `ValidationError` naming the variable, instead of silently falling back to the default. Booleans accept `true/false`, `1/0`, `yes/no`, `on/off`.
+
 ---
 
 ## File Storage

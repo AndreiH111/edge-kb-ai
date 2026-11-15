@@ -10,7 +10,6 @@ The class is skipped unless the offline settings pinned by the root
 real ``.env``), and loads the module in ``setUpClass`` so a skip runs nothing.
 """
 
-import dataclasses
 import importlib.util
 import unittest
 from pathlib import Path
@@ -67,7 +66,7 @@ class RetrieveFromAllSourcesTests(unittest.TestCase):
 
     def test_large_named_file_is_searched_not_dumped(self) -> None:
         self.module.documents = [_doc("Internships_2024.xlsx", "x" * 50), _doc("handbook.pdf")]
-        tight = dataclasses.replace(self.module.settings, retriever_max_file_chars=10)
+        tight = self.module.settings.model_copy(update={"retriever_max_file_chars": 10})
 
         with patch.object(self.module, "settings", tight):
             self.module.retrieve_from_all_sources("Which internships are remote?")
