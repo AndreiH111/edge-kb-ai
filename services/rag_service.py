@@ -1,7 +1,16 @@
 import re
-from typing import Dict, List
+from collections import defaultdict
+from typing import DefaultDict, List
 
 from langchain.chat_models import init_chat_model
+from langchain_core.chat_history import InMemoryChatMessageHistory
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    get_buffer_string,
+    trim_messages,
+)
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -9,7 +18,9 @@ from core.config import settings
 from services import embed_service, query_service
 
 
-chat_sessions: Dict[str, List[Dict[str, str]]] = {}
+chat_sessions: DefaultDict[str, InMemoryChatMessageHistory] = defaultdict(
+    InMemoryChatMessageHistory
+)
 
 template = """
 You are an expert assistant. Answer the user's question clearly and concisely.
@@ -58,14 +69,28 @@ model = create_llm()
 chain = prompt | model | StrOutputParser()
 
 
-def format_chat_history(history: List[Dict[str, str]]) -> str:
-    if not history:
+def get_history(session_id: str) -> InMemoryChatMessageHistory:
+    """Return the session's chat history, creating it on first use."""
+    return chat_sessions[session_id]
+
+
+def recent_messages(history: InMemoryChatMessageHistory) -> List[BaseMessage]:
+    """The last ``MAX_CHAT_HISTORY_MESSAGES`` messages, starting on a user turn."""
+    return trim_messages(
+        history.messages,
+        max_tokens=settings.max_chat_history_messages,
+        token_counter=len,
+        strategy="last",
+        start_on="human",
+    )
+
+
+def format_chat_history(history: InMemoryChatMessageHistory) -> str:
+    recent = recent_messages(history)
+    if not recent:
         return "No previous messages in this session."
 
-    recent_history = history[-settings.max_chat_history_messages :]
-    return "\n".join(
-        f"{message['role'].title()}: {message['content']}" for message in recent_history
-    )
+    return get_buffer_string(recent, human_prefix="User", ai_prefix="Assistant")
 
 
 def format_context(documents) -> str:
@@ -82,16 +107,17 @@ def truncate_history_content(content: str) -> str:
     return f"{content[:settings.max_chat_history_content_chars]}... [truncated]"
 
 
-def add_chat_history(history: List[Dict[str, str]], question: str, answer: str) -> None:
-    history.extend(
+def add_chat_history(
+    history: InMemoryChatMessageHistory, question: str, answer: str
+) -> None:
+    # One add_messages call keeps the question/answer pair adjacent.
+    history.add_messages(
         [
-            {"role": "user", "content": truncate_history_content(question)},
-            {"role": "assistant", "content": truncate_history_content(answer)},
+            HumanMessage(truncate_history_content(question)),
+            AIMessage(truncate_history_content(answer)),
         ]
     )
-
-    if len(history) > settings.max_chat_history_messages:
-        del history[: -settings.max_chat_history_messages]
+    history.messages = recent_messages(history)
 
 
 def is_exhaustive_data_request(question: str) -> bool:
@@ -147,7 +173,7 @@ def format_all_records() -> str:
 
 
 def answer_question(question: str, session_id: str) -> str:
-    history = chat_sessions.setdefault(session_id, [])
+    history = get_history(session_id)
 
     if is_exhaustive_data_request(question):
         answer = format_all_records()

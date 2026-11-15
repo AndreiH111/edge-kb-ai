@@ -50,8 +50,8 @@ Thin routers over service modules. All routes are prefixed `/ai`.
 - `core/config.py` — every setting as a frozen `Settings` dataclass read from env/`.env`. Add new config here via the `_env_*` helpers.
 - `models/schemas.py` — Pydantic request/response models.
 - `services/` — key modules:
-  - `agent_service.py` — the agentic core: LangGraph `create_react_agent`, KB tools, Jira MCP loading, SSE streaming (`astream_answer`), and `AgentStatus`.
-  - `rag_service.py` — the classic LCEL chain, `create_llm()` (LLMs are built with `init_chat_model`; `chunking_service.create_chunking_llm()` likewise), in-memory `chat_sessions`, and the exhaustive-dump fast path. This is the agent's fallback.
+  - `agent_service.py` — the agentic core: LangGraph agent built with `langchain.agents.create_agent`, KB tools, Jira MCP loading, SSE streaming (`astream_answer`), and `AgentStatus`.
+  - `rag_service.py` — the classic LCEL chain, `create_llm()` (LLMs are built with `init_chat_model`; `chunking_service.create_chunking_llm()` likewise), in-memory `chat_sessions` (`InMemoryChatMessageHistory` per session via `get_history`, trimmed by `recent_messages`), and the exhaustive-dump fast path. This is the agent's fallback.
   - `embed_service.py` — vector store + `retrieve_from_all_sources`. **Importing it runs `initialize_on_startup()`** (vector store + S3 sync) — heavy; keep it out of unit tests.
   - `vectorstore_service.py` (Chroma / SAP HANA), `storage_service.py` (local / S3), `job_queue.py` (async upload/reindex).
   - Parsing & chunking: `excel_service.py` (pandas rows), `document_service.py` (PDF/PPTX via Docling), `chunking_service.py`, `classifier_service.py`.
@@ -114,7 +114,6 @@ Not lazy about: understanding the problem; input validation at trust boundaries;
 - **Too many tool schemas can exceed the LLM's token/rate limit.** Binding all ~38 Jira tools adds thousands of tokens per request; on low tiers (e.g. Groq's 8000 TPM) this returns `413`, the agent throws, and it falls back to the legacy chain ("I don't have that information"). Restrict `JIRA_ENABLED_TOOLS` to a few tools.
 - **Docling must stay a lazy import.** `document_service._converter()` imports it on first use: the import pulls torch and the first PDF/PPTX conversion downloads layout models (prefetch with `docling-tools models download`). Tests inject a fake `docling` via `sys.modules`; never import the real one in a test.
 - **`.env` changes require a full server restart** — `--reload` only watches `.py` files.
-- `langgraph.prebuilt.create_react_agent` is deprecated (moved to `langchain.agents`) but intentionally kept under the pinned `langgraph<2`.
 
 ## Reference
 
