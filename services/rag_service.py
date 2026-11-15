@@ -15,6 +15,7 @@ You are an expert assistant. Answer the user's question clearly and concisely.
 Use the chat history to understand follow-up questions and references to earlier messages.
 Use the retrieved context when it is relevant to the user's question.
 If the user names a specific file, prioritize records from that source file.
+Cite the context passages you used as [n] and name their file; do not cite passages you did not use.
 
 Chat history:
 {chat_history}
@@ -84,11 +85,33 @@ def format_chat_history(history: List[Dict[str, str]]) -> str:
     )
 
 
+def _locator(metadata: dict) -> str:
+    """One-line citation locator from loader metadata, e.g. ``a.xlsx (sheet Data, row 3)``."""
+    parts = [f"{key} {metadata[key]}" for key in ("sheet", "page", "slide") if key in metadata]
+    if "row_range" in metadata:
+        parts.append(f"rows {metadata['row_range']}")
+    elif "row" in metadata:
+        parts.append(f"row {metadata['row']}")
+    source = metadata.get("source") or "unknown source"
+    return f"{source} ({', '.join(parts)})" if parts else source
+
+
 def format_context(documents) -> str:
+    """Number the passages as ``[n] <locator>`` blocks, deduped by ``id`` (or content)."""
     if not documents:
         return "No relevant context found."
 
-    return "\n\n".join(document.page_content for document in documents)
+    seen = set()
+    passages = []
+    for document in documents:
+        key = document.id if document.id is not None else document.page_content
+        if key in seen:
+            continue
+        seen.add(key)
+        passages.append(
+            f"[{len(passages) + 1}] {_locator(document.metadata)}\n{document.page_content}"
+        )
+    return "\n\n".join(passages)
 
 
 def truncate_history_content(content: str) -> str:
