@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 import pandas as pd
 from langchain_core.documents import Document
@@ -24,6 +24,7 @@ def row_to_document(file_path: Path, sheet_name: str, row_index: int, row) -> Do
     fields = []
     metadata = {
         "source": file_path.name,
+        "file_type": "excel",
         "sheet": sheet_name,
         "row": int(row_index),
     }
@@ -54,18 +55,15 @@ def row_to_document(file_path: Path, sheet_name: str, row_index: int, row) -> Do
     )
 
 
-def load_excel_documents() -> Tuple[List[Document], List[str]]:
-    loaded_documents = []
-    loaded_ids = []
+def load_excel_file(file_path: Path) -> List[Document]:
+    """One Document per row (blank rows dropped) across every sheet of one workbook."""
+    return [
+        row_to_document(file_path, sheet_name, row_index, row)
+        for sheet_name, df in pd.read_excel(file_path, sheet_name=None).items()
+        for row_index, row in df.dropna(how="all").iterrows()
+    ]
 
-    for excel_file in get_excel_files():
-        sheets = pd.read_excel(excel_file, sheet_name=None)
 
-        for sheet_name, df in sheets.items():
-            for row_index, row in df.dropna(how="all").iterrows():
-                document = row_to_document(excel_file, sheet_name, row_index, row)
-                if document.page_content.strip():
-                    loaded_documents.append(document)
-                    loaded_ids.append(document.id)
-
-    return loaded_documents, loaded_ids
+def load_excel_documents() -> List[Document]:
+    """Rows of every stored workbook."""
+    return [document for excel_file in get_excel_files() for document in load_excel_file(excel_file)]

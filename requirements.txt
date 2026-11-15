@@ -12,10 +12,10 @@ python-dotenv
 pandas
 openpyxl
 xlrd
-pypdf
-python-pptx
-pillow
-pytesseract
+# PDF/PowerPoint parsing. Pulls torch: on CPU-only machines install with
+#   pip install docling --extra-index-url https://download.pytorch.org/whl/cpu
+# and prefetch the layout models with `docling-tools models download`.
+docling
 boto3
 
 # Optional: SAP HANA Cloud Vector Engine backend
