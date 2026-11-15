@@ -11,10 +11,13 @@ used as a fallback.
 import json
 import re
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
+from langchain.chat_models import init_chat_model
 from langchain_core.documents import Document
+from langchain_core.utils.json import parse_json_markdown
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pydantic import BaseModel, TypeAdapter
 
 from core.config import settings
 from services.classifier_service import SheetClassification, classify_excel_files
@@ -39,6 +42,16 @@ FALLBACK_CHUNK_OVERLAP = 80
 FALLBACK_SEPARATORS = ["\n\n", "\n", ". ", " "]
 
 
+class _Section(BaseModel):
+    """One titled section in the chunking LLM's JSON reply."""
+
+    title: str
+    content: str
+
+
+_SECTIONS = TypeAdapter(list[_Section])
+
+
 # ---------------------------------------------------------------------------
 # LLM client creation
 # ---------------------------------------------------------------------------
@@ -46,43 +59,21 @@ FALLBACK_SEPARATORS = ["\n\n", "\n", ". ", " "]
 
 def create_chunking_llm():
     """Create the LLM client for semantic chunking based on hosted chunking settings."""
-    provider = settings.hosted_chunking_provider
-
-    if provider == "openai":
-        from langchain_openai import ChatOpenAI
-
-        kwargs: Dict[str, Any] = {
-            "model": settings.hosted_chunking_model,
-            "temperature": settings.hosted_chunking_temperature,
-            "max_tokens": settings.hosted_chunking_max_tokens,
-            "model_kwargs": {"top_p": settings.hosted_chunking_top_p},
-        }
-        if settings.hosted_chunking_api_key:
-            kwargs["api_key"] = settings.hosted_chunking_api_key
-        if settings.hosted_chunking_base_url:
-            kwargs["base_url"] = settings.hosted_chunking_base_url
-
-        return ChatOpenAI(**kwargs)
-
-    if provider == "groq":
-        from langchain_groq import ChatGroq
-
-        kwargs = {
-            "model": settings.hosted_chunking_model,
-            "temperature": settings.hosted_chunking_temperature,
-            "max_tokens": settings.hosted_chunking_max_tokens,
-            "model_kwargs": {"top_p": settings.hosted_chunking_top_p},
-        }
-        if settings.hosted_chunking_api_key:
-            kwargs["api_key"] = settings.hosted_chunking_api_key
-        if settings.hosted_chunking_base_url:
-            kwargs["groq_api_base"] = settings.hosted_chunking_base_url
-
-        return ChatGroq(**kwargs)
-
-    raise ValueError(
-        f"Unsupported hosted chunking provider: {provider}. "
-        "Set HOSTED_CHUNKING_PROVIDER to 'openai' or 'groq'."
+    optional = {
+        key: value
+        for key, value in (
+            ("api_key", settings.hosted_chunking_api_key),
+            ("base_url", settings.hosted_chunking_base_url),
+        )
+        if value
+    }
+    return init_chat_model(
+        settings.hosted_chunking_model,
+        model_provider=settings.hosted_chunking_provider,
+        temperature=settings.hosted_chunking_temperature,
+        max_tokens=settings.hosted_chunking_max_tokens,
+        model_kwargs={"top_p": settings.hosted_chunking_top_p},
+        **optional,
     )
 
 
@@ -161,34 +152,13 @@ def _extract_last_sentences(text: str, count: int = 2) -> str:
 
 
 def _parse_llm_json_response(response_text: str) -> Optional[List[Dict[str, str]]]:
-    """Parse LLM response as JSON, handling markdown code fences."""
-    text = response_text.strip()
-
-    # Strip markdown code fences if present
-    if text.startswith("```"):
-        lines = text.split("\n")
-        # Remove first line (```json or ```) and last line (```)
-        if lines[-1].strip() == "```":
-            lines = lines[1:-1]
-        else:
-            lines = lines[1:]
-        text = "\n".join(lines).strip()
-
+    """Parse an LLM response (optionally ```json-fenced) into titled sections, or None."""
     try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
+        # json.loads, not the default partial parser: truncated replies must fall back, not lose text.
+        sections = _SECTIONS.validate_python(parse_json_markdown(response_text, parser=json.loads))
+    except (ValueError, TypeError):  # JSONDecodeError and ValidationError are ValueErrors
         return None
-
-    if not isinstance(parsed, list):
-        return None
-
-    for item in parsed:
-        if not isinstance(item, dict):
-            return None
-        if "title" not in item or "content" not in item:
-            return None
-
-    return parsed
+    return [section.model_dump() for section in sections]
 
 
 def semantic_chunk_document(document: Document, llm) -> List[Document]:

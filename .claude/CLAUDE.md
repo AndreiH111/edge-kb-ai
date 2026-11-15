@@ -51,7 +51,7 @@ Thin routers over service modules. All routes are prefixed `/ai`.
 - `models/schemas.py` — Pydantic request/response models.
 - `services/` — key modules:
   - `agent_service.py` — the agentic core: LangGraph `create_react_agent`, KB tools, Jira MCP loading, SSE streaming (`astream_answer`), and `AgentStatus`.
-  - `rag_service.py` — the classic LCEL chain, `create_llm()`, in-memory `chat_sessions`, and the exhaustive-dump fast path. This is the agent's fallback.
+  - `rag_service.py` — the classic LCEL chain, `create_llm()` (LLMs are built with `init_chat_model`; `chunking_service.create_chunking_llm()` likewise), in-memory `chat_sessions`, and the exhaustive-dump fast path. This is the agent's fallback.
   - `embed_service.py` — vector store + `retrieve_from_all_sources`. **Importing it runs `initialize_on_startup()`** (vector store + S3 sync) — heavy; keep it out of unit tests.
   - `vectorstore_service.py` (Chroma / SAP HANA), `storage_service.py` (local / S3), `job_queue.py` (async upload/reindex).
   - Parsing & chunking: `excel_service.py` (pandas rows), `document_service.py` (PDF/PPTX via Docling), `chunking_service.py`, `classifier_service.py`.

@@ -9,10 +9,6 @@ def get_supported_files() -> List[Path]:
     return file_storage.local_files()
 
 
-def list_stored_files() -> List[str]:
-    return file_storage.list_filenames()
-
-
 def list_stored_file_details() -> List[FileDetail]:
     return file_storage.list_file_details()
 
@@ -38,10 +34,6 @@ def sync_storage_to_local() -> List[Path]:
 
 def file_exists(filename: str) -> bool:
     return file_storage.exists(filename)
-
-
-def storage_location(filename: str) -> str:
-    return file_storage.location(filename)
 
 
 def delete_file_from_storage(filename: str, missing_ok: bool = False) -> None:

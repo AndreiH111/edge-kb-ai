@@ -36,15 +36,15 @@ class TestCreateChunkingLlm(unittest.TestCase):
         mock_settings.hosted_chunking_top_p = 1.0
         mock_settings.hosted_chunking_max_tokens = 2048
 
-        with patch("langchain_openai.ChatOpenAI") as mock_chat:
-            mock_chat.return_value = MagicMock()
-            llm = create_chunking_llm()
-            mock_chat.assert_called_once()
-            self.assertIsNotNone(llm)
+        # Real construction: init_chat_model caches the provider class, so patching it is unreliable.
+        llm = create_chunking_llm()
+        self.assertEqual(type(llm).__name__, "ChatOpenAI")
+        self.assertEqual((llm.model_name, llm.max_tokens, llm.openai_api_base), ("gpt-4o-mini", 2048, None))
 
     @patch("services.chunking_service.settings")
     def test_unsupported_provider_raises(self, mock_settings):
         mock_settings.hosted_chunking_provider = "unsupported"
+        mock_settings.hosted_chunking_model = "some-model"
 
         with self.assertRaises(ValueError) as ctx:
             create_chunking_llm()
@@ -146,6 +146,9 @@ class TestParseJsonResponse(unittest.TestCase):
 
     def test_malformed_json_returns_none(self):
         self.assertIsNone(_parse_llm_json_response("not json at all"))
+
+    def test_truncated_json_returns_none(self):
+        self.assertIsNone(_parse_llm_json_response('[{"title": "A", "content": "tru'))
 
     def test_missing_keys_returns_none(self):
         response = json.dumps([{"title": "T"}])  # missing "content"

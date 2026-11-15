@@ -1,6 +1,7 @@
 import re
 from typing import Dict, List
 
+from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -30,44 +31,27 @@ prompt = ChatPromptTemplate.from_template(template)
 
 def create_llm():
     if settings.use_local_llm:
-        from langchain_ollama import ChatOllama
+        return init_chat_model(settings.ollama_llm_model, model_provider="ollama")
 
-        return ChatOllama(model=settings.ollama_llm_model)
-
-    if settings.hosted_llm_provider == "openai":
-        from langchain_openai import ChatOpenAI
-
-        kwargs = {
-            "model": settings.hosted_llm_model,
-            "temperature": settings.hosted_llm_temperature,
-            "max_tokens": settings.hosted_llm_max_tokens,
-            "model_kwargs": {"top_p": settings.hosted_llm_top_p},
-        }
-        if settings.hosted_llm_api_key:
-            kwargs["api_key"] = settings.hosted_llm_api_key
-        if settings.hosted_llm_base_url:
-            kwargs["base_url"] = settings.hosted_llm_base_url
-
-        return ChatOpenAI(**kwargs)
-
+    optional = {
+        key: value
+        for key, value in (
+            ("api_key", settings.hosted_llm_api_key),
+            ("base_url", settings.hosted_llm_base_url),
+        )
+        if value
+    }
     if settings.hosted_llm_provider == "groq":
-        from langchain_groq import ChatGroq
+        optional["reasoning_effort"] = settings.groq_reasoning_effort
 
-        kwargs = {
-            "model": settings.hosted_llm_model,
-            "temperature": settings.hosted_llm_temperature,
-            "max_tokens": settings.hosted_llm_max_tokens,
-            "model_kwargs": {"top_p": settings.hosted_llm_top_p},
-            "reasoning_effort": settings.groq_reasoning_effort,
-        }
-        if settings.hosted_llm_api_key:
-            kwargs["api_key"] = settings.hosted_llm_api_key
-        if settings.hosted_llm_base_url:
-            kwargs["groq_api_base"] = settings.hosted_llm_base_url
-
-        return ChatGroq(**kwargs)
-
-    raise ValueError(f"Unsupported hosted LLM provider: {settings.hosted_llm_provider}")
+    return init_chat_model(
+        settings.hosted_llm_model,
+        model_provider=settings.hosted_llm_provider,
+        temperature=settings.hosted_llm_temperature,
+        max_tokens=settings.hosted_llm_max_tokens,
+        model_kwargs={"top_p": settings.hosted_llm_top_p},
+        **optional,
+    )
 
 
 model = create_llm()
