@@ -16,7 +16,7 @@ A FastAPI-based retrieval-augmented generation (RAG) application. Upload documen
 - **Multiple storage backends** — Local filesystem or AWS S3
 - **Session-based chat** — Follow-up questions use conversation history
 - **History-aware retrieval** — Follow-ups are rewritten into standalone search questions before retrieval, with optional multi-query expansion (`QUERY_REWRITE_ENABLED`, `MULTI_QUERY_COUNT`)
-- **Source-aware retrieval** — Retrieves relevant context across all indexed files
+- **Source-aware retrieval** — Retrieves relevant context across all indexed files; passages are numbered with file/page/sheet/slide locators so answers can cite them as `[n]`
 - **Hybrid search** — BM25 lexical ranking fused with vector similarity (reciprocal rank fusion), so exact identifiers and rare terms are not lost to embeddings
 - **Self-corrective retrieval** — The agent's knowledge-base search is a LangGraph graph: an LLM grades the passages, rewrites the query and retries when nothing is relevant, then reranks the results (`RAG_*` settings)
 - **Agentic chat** — The LLM decides which tools to call (search the knowledge base, or query Jira read-only via an MCP server) instead of a fixed retrieve-then-answer flow, with automatic fallback to the classic RAG chain

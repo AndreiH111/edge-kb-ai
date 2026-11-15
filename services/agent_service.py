@@ -43,7 +43,7 @@ How to decide:
 - Any question about the uploaded documents or knowledge base -> call `search_knowledge_base` first.
 - Only answer once a tool has returned. If a tool returns nothing useful, say so plainly instead of inventing an answer.
 - Use the conversation history to resolve follow-up questions and references to earlier messages.
-- Answer clearly and concisely, and mention the source file or the Jira tool the information came from.
+- Answer clearly and concisely. Cite the knowledge-base passages you used as [n] (as numbered in that search result) together with their file name, or name the Jira tool the information came from; do not cite passages you did not use.
 """
 
 
