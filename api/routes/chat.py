@@ -53,7 +53,10 @@ async def ask_question(
             detail="Provide a question in the JSON body or as a query parameter.",
         )
 
-    result = await agent_service.aanswer_question(user_question, user_session_id)
+    source = request.filename if request else None
+    result = await agent_service.aanswer_question(
+        user_question, user_session_id, source=source
+    )
     response.set_cookie(
         key="ai_session_id",
         value=user_session_id,
@@ -92,8 +95,9 @@ async def ask_question_stream(
         )
 
     async def event_stream():
+        source = request.filename if request else None
         async for name, payload in agent_service.astream_answer(
-            user_question, user_session_id
+            user_question, user_session_id, source=source
         ):
             yield f"event: {name}\ndata: {json.dumps(payload)}\n\n"
 

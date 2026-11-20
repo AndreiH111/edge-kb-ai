@@ -69,7 +69,11 @@ def _after_retrieve(state: RetrievalState) -> str:
     # shortcut: infers retrieve_from_all_sources' whole-file branch by re-matching sources and
     # counting their chunks; have embed_service report the branch if this ever misfires.
     documents = state["documents"]
-    matched = set(embed_service.get_sources_matching_query(state["query"])) if documents else set()
+    pinned = embed_service.pinned_source.get()
+    if pinned:
+        matched = {pinned} if documents else set()
+    else:
+        matched = set(embed_service.get_sources_matching_query(state["query"])) if documents else set()
     named = sum(doc.metadata.get("source") in matched for doc in embed_service.documents)
     return END if matched and len(documents) == named else "grade"
 

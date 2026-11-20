@@ -103,6 +103,9 @@ def list_knowledge_base_sources() -> str:
     from services import embed_service
 
     sources = embed_service.get_indexed_sources()
+    pinned = embed_service.pinned_source.get()
+    if pinned:
+        sources = [source for source in sources if source == pinned]
     if not sources:
         return "No documents are currently indexed."
 
@@ -251,6 +254,22 @@ def _extract_answer(result) -> str:
     return _chunk_text(messages[-1].content).strip()
 
 
+def _source_scope(source: Optional[str]):
+    """Pin retrieval to ``source`` in this task. Missing on test fakes, so those stay unscoped."""
+    from services import embed_service
+
+    use_source = getattr(embed_service, "use_source", None)
+    if not source or use_source is None:
+        return contextlib.nullcontext()
+    return use_source(source)
+
+
+def _call_in_source(source, fn, *args):
+    """Run ``fn`` in a worker thread with the same source pin (context vars are not copied on 3.9)."""
+    with _source_scope(source):
+        return fn(*args)
+
+
 def _extract_tools_used(messages) -> List[str]:
     """Collect, in order and de-duplicated, the names of tools the agent called."""
     used: List[str] = []
@@ -262,44 +281,52 @@ def _extract_tools_used(messages) -> List[str]:
     return used
 
 
-async def aanswer_question(question: str, session_id: str) -> AgentResult:
+async def aanswer_question(
+    question: str, session_id: str, source: Optional[str] = None
+) -> AgentResult:
     """Answer a question with the agent, reusing the legacy chat-history store.
 
     Falls back to the synchronous legacy RAG chain when the agent is unavailable
     or an invocation fails (e.g. a local model that cannot tool-call).
+    ``source`` limits retrieval to that indexed file.
     """
     from services import rag_service
 
-    history = rag_service.get_history(session_id)
+    with _source_scope(source):
+        history = rag_service.get_history(session_id)
 
-    # Fast path: exhaustive "list everything" requests bypass the LLM entirely,
-    # matching the legacy behaviour.
-    if rag_service.is_exhaustive_data_request(question):
-        answer = rag_service.format_all_records()
+        # Fast path: exhaustive "list everything" requests bypass the LLM entirely,
+        # matching the legacy behaviour.
+        if rag_service.is_exhaustive_data_request(question):
+            answer = rag_service.format_all_records()
+            rag_service.add_chat_history(history, question, answer)
+            return AgentResult(answer=answer, tools_used=[])
+
+        if _agent is None:
+            answer = await asyncio.to_thread(
+                _call_in_source, source, rag_service.answer_question, question, session_id
+            )
+            return AgentResult(answer=answer, tools_used=[])
+
+        messages = [*rag_service.recent_messages(history), HumanMessage(content=question)]
+
+        try:
+            result = await _agent.ainvoke({"messages": messages})
+        except Exception:
+            logger.exception("Agent invocation failed; falling back to legacy RAG chain.")
+            answer = await asyncio.to_thread(
+                _call_in_source, source, rag_service.answer_question, question, session_id
+            )
+            return AgentResult(answer=answer, tools_used=[])
+
+        answer = _extract_answer(result)
+        tools_used = _extract_tools_used(result.get("messages", []))
         rag_service.add_chat_history(history, question, answer)
-        return AgentResult(answer=answer, tools_used=[])
-
-    if _agent is None:
-        answer = await asyncio.to_thread(rag_service.answer_question, question, session_id)
-        return AgentResult(answer=answer, tools_used=[])
-
-    messages = [*rag_service.recent_messages(history), HumanMessage(content=question)]
-
-    try:
-        result = await _agent.ainvoke({"messages": messages})
-    except Exception:
-        logger.exception("Agent invocation failed; falling back to legacy RAG chain.")
-        answer = await asyncio.to_thread(rag_service.answer_question, question, session_id)
-        return AgentResult(answer=answer, tools_used=[])
-
-    answer = _extract_answer(result)
-    tools_used = _extract_tools_used(result.get("messages", []))
-    rag_service.add_chat_history(history, question, answer)
-    return AgentResult(answer=answer, tools_used=tools_used)
+        return AgentResult(answer=answer, tools_used=tools_used)
 
 
 async def astream_answer(
-    question: str, session_id: str
+    question: str, session_id: str, source: Optional[str] = None
 ) -> AsyncIterator[Tuple[str, dict]]:
     """Stream an answer as ``(event_name, payload)`` pairs.
 
@@ -315,6 +342,14 @@ async def astream_answer(
     History persists only on the normal ``done`` path (a client that disconnects
     mid-stream will not save the turn).
     """
+    with _source_scope(source):
+        async for event in _astream_answer(question, session_id, source):
+            yield event
+
+
+async def _astream_answer(
+    question: str, session_id: str, source: Optional[str]
+) -> AsyncIterator[Tuple[str, dict]]:
     from services import rag_service
 
     history = rag_service.get_history(session_id)
@@ -329,7 +364,7 @@ async def astream_answer(
         return
 
     if _agent is None:
-        async for event in _astream_legacy(question, session_id):
+        async for event in _astream_legacy(question, session_id, source):
             yield event
         return
 
@@ -369,7 +404,7 @@ async def astream_answer(
         if not started:
             # Nothing emitted yet — fall back to the legacy chain, consistent
             # with aanswer_question's behaviour on invocation failure.
-            async for event in _astream_legacy(question, session_id):
+            async for event in _astream_legacy(question, session_id, source):
                 yield event
             return
         # Tokens already streamed to the client; we cannot cleanly restart, so
@@ -383,7 +418,7 @@ async def astream_answer(
 
 
 async def _astream_legacy(
-    question: str, session_id: str
+    question: str, session_id: str, source: Optional[str] = None
 ) -> AsyncIterator[Tuple[str, dict]]:
     """Stream the classic RAG chain token-by-token.
 
@@ -399,6 +434,8 @@ async def _astream_legacy(
 
     try:
         context = await asyncio.to_thread(
+            _call_in_source,
+            source,
             query_service.build_retrieval_documents,
             question,
             chat_history,
@@ -417,7 +454,7 @@ async def _astream_legacy(
     except Exception:
         logger.exception("Legacy streaming failed; using the synchronous fallback.")
         answer = await asyncio.to_thread(
-            rag_service.answer_question, question, session_id
+            _call_in_source, source, rag_service.answer_question, question, session_id
         )
         yield ("token", {"text": answer})
         yield ("done", {"session_id": session_id, "answer": answer, "tools_used": []})

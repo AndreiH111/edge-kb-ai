@@ -15,6 +15,7 @@ scenario is driven per-test with ``monkeypatch`` on the specific service functio
 
 import sys
 import types
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -36,6 +37,7 @@ def _make_fake_embed_service() -> types.ModuleType:
         name="retrieve_from_all_sources", return_value=[]
     )
     module.get_indexed_sources = MagicMock(name="get_indexed_sources", return_value=[])
+    module.pinned_source = ContextVar("pinned_source", default=None)
     module.initialize_on_startup = MagicMock(name="initialize_on_startup")
     return module
 
