@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1)
     session_id: Optional[str] = Field(default=None, min_length=1)
+    filename: Optional[str] = Field(default=None, min_length=1)
 
 
 class ChatResponse(BaseModel):

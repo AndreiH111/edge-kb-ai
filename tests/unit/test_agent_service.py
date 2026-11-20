@@ -10,6 +10,7 @@ import contextlib
 import sys
 import types
 import unittest
+from contextvars import ContextVar
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -154,6 +155,7 @@ def make_fake_embed(*, docs=None, sources=None):
     module = types.ModuleType("services.embed_service")
     module.retrieve_from_all_sources = lambda query: list(docs or [])
     module.get_indexed_sources = lambda: list(sources or [])
+    module.pinned_source = ContextVar("pinned_source", default=None)
     return module
 
 

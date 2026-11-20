@@ -32,7 +32,7 @@ def _parse_sse(text: str):
 
 
 def _fake_answer(answer="Hello from the agent.", tools_used=None):
-    async def _aanswer(question, session_id):
+    async def _aanswer(question, session_id, source=None):
         return agent_service.AgentResult(
             answer=answer, tools_used=list(tools_used or [])
         )
@@ -127,6 +127,21 @@ class TestChat:
 
         assert resp.status_code == 422
 
+    def test_filename_is_forwarded_as_source(self, client, monkeypatch):
+        seen = {}
+
+        async def _aanswer(question, session_id, source=None):
+            seen["source"] = source
+            return agent_service.AgentResult(answer="ok", tools_used=[])
+
+        monkeypatch.setattr(agent_service, "aanswer_question", _aanswer)
+        resp = client.post(
+            "/ai/chat", json={"question": "hi", "filename": "Resort1.xlsx"}
+        )
+
+        assert resp.status_code == 200
+        assert seen["source"] == "Resort1.xlsx"
+
 
 class TestListEverythingShortcut:
     """Drives the real ``aanswer_question`` (no agent) to check which questions
@@ -183,7 +198,7 @@ class TestChatHistory:
 
 class TestChatStream:
     def test_stream_frames_order_and_done(self, client, monkeypatch):
-        async def fake_astream(question, session_id):
+        async def fake_astream(question, session_id, source=None):
             yield ("tool", {"name": "search_knowledge_base"})
             yield ("token", {"text": "Hel"})
             yield ("token", {"text": "lo"})
@@ -219,7 +234,7 @@ class TestChatStream:
         assert done["tools_used"] == ["search_knowledge_base"]
 
     def test_stream_surfaces_error_frame(self, client, monkeypatch):
-        async def fake_astream(question, session_id):
+        async def fake_astream(question, session_id, source=None):
             yield ("token", {"text": "partial"})
             yield ("error", {"message": "The agent failed while generating the answer."})
 
@@ -236,7 +251,7 @@ class TestChatStream:
         """The no-question guard runs before streaming starts."""
         called = False
 
-        async def fake_astream(question, session_id):
+        async def fake_astream(question, session_id, source=None):
             nonlocal called
             called = True
             yield ("done", {})
