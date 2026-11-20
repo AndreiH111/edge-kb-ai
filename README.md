@@ -317,6 +317,17 @@ Windows (PowerShell):
 venv\Scripts\python scripts/s3_upload_smoke_test.py
 ```
 
+### Manual UI Test (Streamlit)
+
+A throwaway Streamlit page in `frontend/` exercises every `/ai` endpoint (agent status, chat with/without SSE streaming, upload, list, delete, reindex, jobs). Start the API, then:
+
+```bash
+pip install -r frontend/requirements.txt
+streamlit run frontend/streamlit_app.py
+```
+
+Set the backend URL in the sidebar if it isn't `http://127.0.0.1:8000`.
+
 ## Storage Backends
 
 | Backend          | Config                         | Notes                                                          |
