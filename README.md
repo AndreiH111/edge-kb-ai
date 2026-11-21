@@ -175,6 +175,8 @@ curl -X POST http://127.0.0.1:8000/ai/chat \
 {"session_id": "uuid-here", "question": "What internships are available?", "answer": "Based on the documents...", "tools_used": ["search_knowledge_base"]}
 ```
 
+Add `"filename": "report.pdf"` to either chat endpoint's body to answer only from that indexed file.
+
 **Ask a question (streaming SSE):**
 
 `-N` disables curl's buffering so events arrive as they are produced.

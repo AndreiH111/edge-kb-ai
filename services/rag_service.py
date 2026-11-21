@@ -179,9 +179,15 @@ def is_exhaustive_data_request(question: str) -> bool:
 
 
 def format_all_records() -> str:
-    lines = [f"Found {len(embed_service.documents)} records in the current data files:"]
+    source = embed_service.pinned_source.get()
+    records = [
+        document
+        for document in embed_service.documents
+        if not source or document.metadata.get("source") == source
+    ]
+    lines = [f"Found {len(records)} records in the current data files:"]
 
-    for index, document in enumerate(embed_service.documents, start=1):
+    for index, document in enumerate(records, start=1):
         fields = [
             line.strip()
             for line in document.page_content.splitlines()
