@@ -107,6 +107,30 @@ class RetrieveFromAllSourcesTests(unittest.TestCase):
         self.assertEqual(result, [doc_a, doc_b])
         self.store.similarity_search.assert_called_once_with("quokka", k=classic.retriever_k)
 
+    def test_pinned_source_returns_only_that_file(self) -> None:
+        chosen = [_doc("Resort1.xlsx", "resort row")]
+        self.module.documents = chosen + [_doc("test.xlsx", "other")]
+
+        with self.module.use_source("Resort1.xlsx"):
+            result = self.module.retrieve_from_all_sources("What is the policy?")
+
+        self.assertEqual(result, chosen)
+        self.store.similarity_search.assert_not_called()
+
+    def test_pinned_source_clears_after_the_request(self) -> None:
+        layout = _doc("layout.pptx")
+        self.module.documents = [layout, _doc("information.pdf")]
+
+        with self.module.use_source("layout.pptx"):
+            pinned = self.module.retrieve_from_all_sources("policy")
+        self.module.retrieve_from_all_sources("Can you share the policy for remote work?")
+
+        self.assertEqual(pinned, [layout])
+        self.store.similarity_search.assert_called_once_with(
+            "Can you share the policy for remote work?",
+            k=self.module.settings.hybrid_candidates,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

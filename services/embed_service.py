@@ -1,4 +1,6 @@
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -11,6 +13,22 @@ from services.chunking_service import chunk_documents
 from services.excel_service import is_supported_excel_file, load_excel_documents, load_excel_file
 from services.file_service import get_supported_files, sync_storage_to_local
 from services.vectorstore_service import build_vector_store
+
+# Set for one chat request when the UI picks a single data source.
+pinned_source: ContextVar[Optional[str]] = ContextVar("pinned_source", default=None)
+
+
+@contextmanager
+def use_source(source: Optional[str]):
+    """Limit retrieval to one indexed file until the block exits."""
+    if not source:
+        yield
+        return
+    token = pinned_source.set(source)
+    try:
+        yield
+    finally:
+        pinned_source.reset(token)
 
 
 def create_embeddings():
@@ -231,9 +249,25 @@ def _search(query: str, k: int, source: Optional[str] = None) -> List[Document]:
     return fuse_rrf([lexical, semantic])[:k]
 
 
+def _retrieve_source(query: str, source: str) -> List[Document]:
+    """Passages from one file: the whole file when it fits, otherwise a search of that file."""
+    named_documents = [
+        document for document in documents if document.metadata.get("source") == source
+    ]
+    if not named_documents:
+        return []
+    if sum(len(document.page_content) for document in named_documents) <= settings.retriever_max_file_chars:
+        return named_documents
+    return _search(query, settings.retriever_k_per_source, source)
+
+
 def retrieve_from_all_sources(query: str) -> List[Document]:
     if not documents:
         return []
+
+    source = pinned_source.get()
+    if source:
+        return _retrieve_source(query, source)
 
     matched_sources = get_sources_matching_query(query)
     if not matched_sources:

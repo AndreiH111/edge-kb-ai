@@ -103,6 +103,9 @@ def list_knowledge_base_sources() -> str:
     from services import embed_service
 
     sources = embed_service.get_indexed_sources()
+    pinned = embed_service.pinned_source.get()
+    if pinned:
+        sources = [source for source in sources if source == pinned]
     if not sources:
         return "No documents are currently indexed."
 
@@ -262,12 +265,24 @@ def _extract_tools_used(messages) -> List[str]:
     return used
 
 
-async def aanswer_question(question: str, session_id: str) -> AgentResult:
+async def aanswer_question(
+    question: str, session_id: str, source: Optional[str] = None
+) -> AgentResult:
     """Answer a question with the agent, reusing the legacy chat-history store.
 
     Falls back to the synchronous legacy RAG chain when the agent is unavailable
     or an invocation fails (e.g. a local model that cannot tool-call).
+    ``source`` limits retrieval to that one indexed file.
     """
+    from services import embed_service
+
+    # asyncio.to_thread and LangChain's executor copy context vars, so the pin
+    # reaches retrieval running in worker threads too.
+    with embed_service.use_source(source):
+        return await _aanswer_question(question, session_id)
+
+
+async def _aanswer_question(question: str, session_id: str) -> AgentResult:
     from services import rag_service
 
     history = rag_service.get_history(session_id)
@@ -299,7 +314,7 @@ async def aanswer_question(question: str, session_id: str) -> AgentResult:
 
 
 async def astream_answer(
-    question: str, session_id: str
+    question: str, session_id: str, source: Optional[str] = None
 ) -> AsyncIterator[Tuple[str, dict]]:
     """Stream an answer as ``(event_name, payload)`` pairs.
 
@@ -313,8 +328,16 @@ async def astream_answer(
     Mirrors ``aanswer_question``: same exhaustive fast-path, and the same legacy
     fallback when the agent is unavailable or fails before emitting any token.
     History persists only on the normal ``done`` path (a client that disconnects
-    mid-stream will not save the turn).
+    mid-stream will not save the turn). ``source`` limits retrieval to one file.
     """
+    from services import embed_service
+
+    with embed_service.use_source(source):
+        async for event in _astream_answer(question, session_id):
+            yield event
+
+
+async def _astream_answer(question: str, session_id: str) -> AsyncIterator[Tuple[str, dict]]:
     from services import rag_service
 
     history = rag_service.get_history(session_id)
