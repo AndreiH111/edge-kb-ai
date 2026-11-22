@@ -143,6 +143,15 @@ def add_chat_history(
     history.messages = recent_messages(history)
 
 
+def restore_history(session_id: str, turns) -> None:
+    """Replace a session's memory with the ``question``/``answer`` turns a client stored,
+    so a reopened chat keeps its context across API restarts and instances."""
+    history = get_history(session_id)
+    history.clear()
+    for turn in turns:
+        add_chat_history(history, turn.question, turn.answer)
+
+
 def is_exhaustive_data_request(question: str) -> bool:
     words = set(re.findall(r"[a-z0-9]+", question.lower()))
     data_terms = {

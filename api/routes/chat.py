@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, Cookie, HTTPException, Query, Response, sta
 from fastapi.responses import StreamingResponse
 
 from models.schemas import AgentStatusResponse, ChatRequest, ChatResponse
-from services import agent_service
+from services import agent_service, rag_service
 
 
 router = APIRouter(tags=["chat"])
@@ -53,6 +53,9 @@ async def ask_question(
             detail="Provide a question in the JSON body or as a query parameter.",
         )
 
+    if request and request.history is not None:
+        rag_service.restore_history(user_session_id, request.history)
+
     source = request.filename if request else None
     result = await agent_service.aanswer_question(
         user_question, user_session_id, source=source
@@ -93,6 +96,9 @@ async def ask_question_stream(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Provide a question in the JSON body or as a query parameter.",
         )
+
+    if request and request.history is not None:
+        rag_service.restore_history(user_session_id, request.history)
 
     async def event_stream():
         source = request.filename if request else None

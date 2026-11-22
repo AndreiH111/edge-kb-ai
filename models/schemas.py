@@ -3,10 +3,17 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
+class ChatTurn(BaseModel):
+    question: str
+    answer: str
+
+
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1)
     session_id: Optional[str] = Field(default=None, min_length=1)
     filename: Optional[str] = Field(default=None, min_length=1)
+    # Earlier turns the client stores; when sent, they replace the server-side session memory.
+    history: Optional[List[ChatTurn]] = None
 
 
 class ChatResponse(BaseModel):
