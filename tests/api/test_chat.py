@@ -6,6 +6,7 @@ them via attribute access, so patching the module attribute takes effect.
 """
 
 import json
+from collections import defaultdict
 from types import SimpleNamespace
 
 import pytest
@@ -194,6 +195,30 @@ class TestChatHistory:
 
         # Last 3 would be [a1, q2, a2]; start_on="human" drops the leading AI turn.
         assert rag_service.format_chat_history(history) == "User: q2\nAssistant: a2"
+
+    def test_client_history_replaces_session_memory(self, client, monkeypatch):
+        """A reopened chat sends its stored turns; they replace whatever the server held."""
+        from services import rag_service  # after ``client`` injected the fake embed_service
+
+        seen = {}
+
+        def fake_answer(question, session_id):
+            seen["history"] = rag_service.format_chat_history(rag_service.get_history(session_id))
+            return "ok"
+
+        monkeypatch.setattr(rag_service, "chat_sessions", defaultdict(InMemoryChatMessageHistory))
+        monkeypatch.setattr(agent_service, "_agent", None)
+        monkeypatch.setattr(rag_service, "answer_question", fake_answer)
+        rag_service.add_chat_history(rag_service.get_history("chat-1"), "stale q", "stale a")
+
+        resp = client.post("/ai/chat", json={
+            "question": "can you paraphrase your answer",
+            "session_id": "chat-1",
+            "history": [{"question": "How do I request access?", "answer": "Use User Management."}],
+        })
+
+        assert resp.status_code == 200
+        assert seen["history"] == "User: How do I request access?\nAssistant: Use User Management."
 
 
 class TestChatStream:

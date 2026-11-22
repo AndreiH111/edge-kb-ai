@@ -177,6 +177,8 @@ curl -X POST http://127.0.0.1:8000/ai/chat \
 
 Add `"filename": "report.pdf"` to either chat endpoint's body to answer only from that indexed file.
 
+Chat memory is held in process and lost on restart. A client that stores its own transcript can send `"history": [{"question": "...", "answer": "..."}]` with the chat's earlier turns; it replaces that `session_id`'s memory, so reopened chats keep their context.
+
 **Ask a question (streaming SSE):**
 
 `-N` disables curl's buffering so events arrive as they are produced.
