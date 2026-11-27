@@ -17,12 +17,13 @@ import logging
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date
-from typing import AsyncIterator, List, Optional, Tuple
+from typing import AsyncIterator, List, Literal, Optional, Tuple, Union
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRequest, dynamic_prompt
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
+from pydantic import BaseModel
 
 from core.config import settings
 
@@ -165,7 +166,54 @@ def list_knowledge_base_sources() -> str:
 
 
 def _knowledge_base_tools() -> list:
-    return [search_knowledge_base, list_knowledge_base_sources]
+    return [search_knowledge_base, list_knowledge_base_sources, query_spreadsheet]
+
+
+class SpreadsheetFilter(BaseModel):
+    """Keep only the rows where ``column <op> value``."""
+
+    column: str
+    op: Literal["==", "!=", ">", ">=", "<", "<=", "contains"]
+    value: Union[str, int, float]
+
+
+@tool
+def query_spreadsheet(
+    file: Optional[str] = None,
+    sheet: Optional[str] = None,
+    filters: Optional[List[SpreadsheetFilter]] = None,
+    group_by: Optional[str] = None,
+    aggregate: Optional[Literal["count", "sum", "mean", "min", "max"]] = None,
+    column: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    descending: bool = False,
+    limit: int = 20,
+) -> str:
+    """Compute exact answers over EVERY row of an indexed Excel workbook. Use this,
+    not `search_knowledge_base` (which only sees a few rows), for counts, totals,
+    averages, min/max, group-bys, top-N and complete row lists.
+
+    `file` is the workbook's file name (it defaults to the file the chat is pinned
+    to); `sheet` defaults to the first sheet. Rows must match every filter: numbers
+    compare numerically, text ignoring case, dates as YYYY-MM-DD text. `group_by`
+    alone counts rows per group; aggregate sum/mean/min/max needs `column`.
+    `sort_by` (with `descending` for top-N) orders the rows or groups and `limit`
+    caps them (default 20, max 200). Each result starts with the sheet, its row
+    count and its column names."""
+    try:
+        from services import embed_service, excel_service
+
+        workbooks = {path.name: path for path in excel_service.get_excel_files()}
+        pinned = embed_service.pinned_source.get()
+        if pinned:  # a chat pinned to one file must not read any other
+            workbooks = {name: path for name, path in workbooks.items() if name == pinned}
+        path = workbooks.get(file or pinned)
+        if path is None:
+            return f"Unknown or missing `file`. Indexed workbooks: {', '.join(workbooks) or 'none'}."
+        rules = [(rule.column, rule.op, rule.value) for rule in filters or []]
+        return excel_service.query_sheet(path, sheet, rules, group_by, aggregate, column, sort_by, descending, limit)
+    except Exception as exc:  # noqa: BLE001 - a raised tool error would abort the agent into the legacy chain
+        return f"query_spreadsheet failed: {exc}"
 
 
 def _jira_mcp_config() -> dict:
