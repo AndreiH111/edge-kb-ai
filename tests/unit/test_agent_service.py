@@ -376,6 +376,55 @@ class KnowledgeBaseToolTests(unittest.TestCase):
         self.assertEqual(result, "No documents are currently indexed.")
 
 
+class QuerySpreadsheetToolTests(unittest.TestCase):
+    def _invoke(self, args, *, pinned=None, error=None):
+        """Run the tool over fake ``a.xlsx``/``b.xlsx`` workbooks; return (result, query_sheet calls)."""
+        calls = []
+
+        def query_sheet(*call_args):
+            calls.append(call_args)
+            if error is not None:
+                raise error
+            return "RESULT"
+
+        excel = types.ModuleType("services.excel_service")
+        excel.get_excel_files = lambda: [SimpleNamespace(name="a.xlsx"), SimpleNamespace(name="b.xlsx")]
+        excel.query_sheet = query_sheet
+        embed = make_fake_embed()
+        embed.pinned_source.set(pinned)
+        with inject_services(embed_service=embed, excel_service=excel):
+            return agent_service.query_spreadsheet.invoke(args), calls
+
+    def test_passes_the_query_to_query_sheet(self):
+        result, calls = self._invoke(
+            {"file": "b.xlsx", "filters": [{"column": "City", "op": "==", "value": "Manila"}], "aggregate": "count"}
+        )
+
+        self.assertEqual(result, "RESULT")
+        self.assertEqual(calls[0][0].name, "b.xlsx")
+        self.assertEqual(calls[0][1:], (None, [("City", "==", "Manila")], None, "count", None, None, False, 20))
+
+    def test_pinned_file_is_the_default_and_other_files_are_refused(self):
+        _, calls = self._invoke({}, pinned="a.xlsx")
+        refused, refused_calls = self._invoke({"file": "b.xlsx"}, pinned="a.xlsx")
+
+        self.assertEqual(calls[0][0].name, "a.xlsx")
+        self.assertEqual(refused, "Unknown or missing `file`. Indexed workbooks: a.xlsx.")
+        self.assertEqual(refused_calls, [])
+
+    def test_unknown_file_lists_the_workbooks(self):
+        result, calls = self._invoke({"file": "nope.xlsx"})
+
+        self.assertEqual(result, "Unknown or missing `file`. Indexed workbooks: a.xlsx, b.xlsx.")
+        self.assertEqual(calls, [])
+
+    def test_errors_are_returned_not_raised(self):
+        # A raised tool error would abort the whole agent into the legacy fallback.
+        result, _ = self._invoke({"file": "a.xlsx"}, error=ValueError("Unknown column 'Cty'"))
+
+        self.assertEqual(result, "query_spreadsheet failed: Unknown column 'Cty'")
+
+
 class JiraMcpConfigTests(unittest.TestCase):
     def _settings(self, **overrides):
         base = dict(
