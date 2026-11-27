@@ -146,8 +146,8 @@ Tuning parameters for the retrieval pipeline and chat session memory.
 | `MAX_CHAT_HISTORY_MESSAGES` | `12` | Messages retained per chat session |
 | `MAX_CHAT_HISTORY_CONTENT_CHARS` | `2000` | Max characters kept per history message |
 | `RAG_GRADING_ENABLED` | `true` | Agent knowledge-base search: one LLM call grades each retrieved passage yes/no and drops irrelevant ones. Named small files sent whole are never graded |
-| `RAG_MAX_RETRIES` | `1` | When grading finds nothing relevant, how many times the LLM rewrites the query and searches again. After the last retry the graded-out passages are returned rather than nothing |
-| `RAG_RERANK_ENABLED` | `true` | Agent knowledge-base search: one LLM call reorders the passages by relevance, then keeps the top `RAG_RERANK_TOP_N` |
+| `RAG_MAX_RETRIES` | `1` | When grading finds nothing relevant, how many times the LLM rewrites the query and searches again. After the last retry the graded-out passages are returned rather than nothing, flagged so the model is told the knowledge base doesn't seem to contain the answer |
+| `RAG_RERANK_ENABLED` | `true` | Agent knowledge-base search: one LLM call reorders the passages by relevance, then keeps the top `RAG_RERANK_TOP_N`. With rerank on (and `RAG_RERANK_TOP_N` > 0), a search of all files or of one file gathers `max(RETRIEVER_K, 3 × RAG_RERANK_TOP_N)` candidates before grading and reranking |
 | `RAG_RERANK_TOP_N` | `5` | Passages kept after a successful rerank (`0` = keep all). Questions naming several large files get `RETRIEVER_K_PER_SOURCE` passages per file, so a low value can drop a file from a comparison; raise it (or use `0`) if you compare many files |
 
 ---
