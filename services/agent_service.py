@@ -12,11 +12,14 @@ already imports ``rag_service``) and essential for unit tests.
 
 import asyncio
 import contextlib
+import json
 import logging
 from dataclasses import dataclass, field
+from datetime import date
 from typing import AsyncIterator, List, Optional, Tuple
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelRequest, dynamic_prompt
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
 
@@ -29,22 +32,57 @@ logger = logging.getLogger(__name__)
 _agent = None
 
 
-SYSTEM_PROMPT = """You are an expert assistant for the edge-kb knowledge base. You can also query Jira (read-only).
+# Indexed files named in the system prompt; the rest are summarised as "+N more".
+MAX_PROMPT_SOURCES = 30
 
-IMPORTANT: You have NO prior knowledge of this user's Jira instance or their uploaded documents. You MUST call the appropriate tool to answer any question about them. Never answer such a question from memory, and never claim you lack the information before you have actually called a tool.
+PROMPT_RULES = """Rules:
+- You know nothing about the user's data except what your tools return. Call a tool before answering any question \
+about it, and never say information is missing before you have searched.
+- Search with short standalone keyword queries; resolve names and references from the conversation. If results are \
+thin, search again with different wording. To compare items, search once per item.
+- Never estimate counts, totals or averages from a few passages: use a tool that computes over all rows if you have \
+one, otherwise say the passages may not cover every row.
+- If the results do not answer the question, or it needs a system none of your tools reach, say plainly what is \
+missing instead of guessing.
+- Reply in the user's language. Use markdown tables for multi-row data.
+- Cite the passages you used as [n] with their file name; do not cite passages you did not use."""
 
-Tools:
-- `search_knowledge_base`: search the uploaded documents (Excel, PDF, PowerPoint) for anything about their contents.
-- `list_knowledge_base_sources`: list which files are currently indexed.
-- Jira tools (e.g. `jira_get_all_projects`, `jira_search`, `jira_get_issue`, and the board/sprint tools, when available): answer questions about Jira projects, issues, sprints, or boards. Jira access is read-only.
 
-How to decide:
-- Any question about Jira (projects, issues, sprints, boards, or "my" items in Jira) -> call a Jira tool first.
-- Any question about the uploaded documents or knowledge base -> call `search_knowledge_base` first.
-- Only answer once a tool has returned. If a tool returns nothing useful, say so plainly instead of inventing an answer.
-- Use the conversation history to resolve follow-up questions and references to earlier messages.
-- Answer clearly and concisely. Cite the knowledge-base passages you used as [n] (as numbered in that search result) together with their file name, or name the Jira tool the information came from; do not cite passages you did not use.
-"""
+@dynamic_prompt
+def system_prompt(request: ModelRequest) -> str:
+    """Build the system prompt for one model call: date, files, bound tools, rules."""
+    from services import embed_service
+
+    tool_names = [t.get("name", "") if isinstance(t, dict) else t.name for t in request.tools]
+    # File names come from uploaders and the client: JSON-quote them so they stay data, not instructions.
+    pinned = embed_service.pinned_source.get()
+    if pinned:
+        files = (
+            f"The user pinned the file {json.dumps(pinned, ensure_ascii=False)}: "
+            "answer knowledge-base questions only from it."
+        )
+    else:
+        # shortcut: rescans every chunk per model call (~7 ms at 200k), cache it if the corpus grows far past that.
+        sources = embed_service.get_indexed_sources()
+        files = f"Indexed files: {json.dumps(sources[:MAX_PROMPT_SOURCES], ensure_ascii=False)}"
+        if len(sources) > MAX_PROMPT_SOURCES:
+            files += f" (+{len(sources) - MAX_PROMPT_SOURCES} more)"
+        files += "."
+
+    lines = [
+        "You are an expert assistant for the edge-kb knowledge base.",
+        # shortcut: server-local date, pass the client's time zone if users span zones.
+        f"Today is {date.today():%A, %d %B %Y}.",
+        files,
+        f"Your tools: {', '.join(tool_names)}.",
+    ]
+    if any(name.startswith("jira_") for name in tool_names):
+        lines.append(
+            "Jira tools are read-only: use them for Jira projects, issues, sprints and boards, "
+            "and decline any request to create, change or delete anything in Jira. "
+            "Cite Jira data by its issue or project key."
+        )
+    return "\n".join(lines) + "\n\n" + PROMPT_RULES
 
 
 @dataclass
@@ -206,7 +244,7 @@ async def lifespan_agent():
 
         try:
             _agent = create_agent(
-                rag_service.create_llm(), tools, system_prompt=SYSTEM_PROMPT
+                rag_service.create_llm(), tools, middleware=[system_prompt]
             )
             logger.info("Agentic chat ready with %d tool(s).", len(tools))
         except Exception as exc:  # noqa: BLE001 - fall back to the legacy chain
