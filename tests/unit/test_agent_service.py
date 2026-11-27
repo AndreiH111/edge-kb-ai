@@ -121,6 +121,9 @@ def make_fake_rag(
     module.format_context = lambda documents: "\n\n".join(
         getattr(doc, "page_content", str(doc)) for doc in documents
     )
+    module.turn_passages = ContextVar("turn_passages", default=None)
+    # Unfiltered: every passage numbered this turn, so tests can watch the per-turn list.
+    module.cited_sources = lambda answer: list(module.turn_passages.get())
     module.get_history = lambda session_id: module.chat_sessions.setdefault(
         session_id, InMemoryChatMessageHistory()
     )
@@ -316,6 +319,50 @@ class AgentInvocationTests(unittest.TestCase):
 
         self.assertEqual(result.answer, "LEGACY ANSWER")
         self.assertEqual(result.tools_used, [])
+
+    def test_tool_threads_number_into_one_turn_list(self):
+        """Parallel tool calls run in worker threads with a copied context, yet append to
+        the turn's single list, which reaches ``sources``."""
+        fake_rag = make_fake_rag()
+
+        @tool
+        def numbering_tool(city: str) -> str:
+            """Number one passage per city (test tool)."""
+            fake_rag.turn_passages.get().append((city, f"{city}.xlsx"))
+            return city
+
+        calls = [
+            {"name": "numbering_tool", "args": {"city": city}, "id": city, "type": "tool_call"}
+            for city in ("manila", "cebu")
+        ]
+        model = FakeToolCallingModel(
+            messages=iter([AIMessage(content="", tool_calls=calls), AIMessage(content="Manila [1], Cebu [2]")])
+        )
+        self._use_agent(create_agent(model, [numbering_tool]))
+        with inject_services(rag_service=fake_rag):
+            result = asyncio.run(agent_service.aanswer_question("compare", "s5"))
+
+        self.assertEqual(sorted(result.sources), [("cebu", "cebu.xlsx"), ("manila", "manila.xlsx")])
+
+    def test_fallback_restarts_citation_numbering(self):
+        """Passages a failed agent numbered are dropped, so the legacy answer's [1] is its own."""
+        fake_rag = make_fake_rag()
+
+        class NumberThenFail:
+            async def ainvoke(self, payload):
+                fake_rag.turn_passages.get().append(("stale", "agent.pdf"))
+                raise RuntimeError("413 rate limit")
+
+        def legacy_answer(question, session_id):
+            fake_rag.turn_passages.get().append(("fresh", "legacy.pdf"))
+            return "LEGACY [1]"
+
+        fake_rag.answer_question = legacy_answer
+        self._use_agent(NumberThenFail())
+        with inject_services(rag_service=fake_rag), self.assertLogs(agent_service.logger, level="ERROR"):
+            result = asyncio.run(agent_service.aanswer_question("hello", "s6"))
+
+        self.assertEqual(result.sources, [("fresh", "legacy.pdf")])
 
     def test_fallback_to_legacy_when_no_agent(self):
         """With no agent built, aanswer_question uses the legacy chain."""
@@ -679,6 +726,22 @@ class AgentStreamingTests(unittest.TestCase):
             [HumanMessage("q"), AIMessage("Hello world")],
         )
 
+    def test_astream_answer_done_carries_sources(self):
+        """Passages numbered while the agent streams reach the ``done`` payload."""
+        fake_rag = make_fake_rag()
+
+        class NumberingAgent(FakeStreamingAgent):
+            async def astream(self, payload, stream_mode=None):
+                fake_rag.turn_passages.get().append(("a", "a.xlsx (sheet S, row 2)"))
+                async for event in super().astream(payload, stream_mode):
+                    yield event
+
+        self._use_agent(NumberingAgent([("messages", (AIMessageChunk(content="See [1]"), _MODEL_NODE))]))
+        with inject_services(rag_service=fake_rag):
+            result = _collect(agent_service.astream_answer("q", "s5"))
+
+        self.assertEqual(result[-1][1]["sources"], [("a", "a.xlsx (sheet S, row 2)")])
+
     def test_astream_answer_skips_tool_node_chunks(self):
         """LLM chunks emitted inside a tool (``langgraph_node == "tools"``) are
         not forwarded; only the agent's ``model`` node reaches the client."""
@@ -698,7 +761,7 @@ class AgentStreamingTests(unittest.TestCase):
             result,
             [
                 ("token", {"text": "answer"}),
-                ("done", {"session_id": "s4", "answer": "answer", "tools_used": []}),
+                ("done", {"session_id": "s4", "answer": "answer", "tools_used": [], "sources": []}),
             ],
         )
 
@@ -724,6 +787,55 @@ class AgentStreamingTests(unittest.TestCase):
             fake_rag.chat_sessions["s2"].messages,
             [HumanMessage("q"), AIMessage("LEGACY")],
         )
+
+    def test_astream_answer_fallback_restarts_numbering(self):
+        """An agent stream failing before any token drops its numbered passages before
+        the legacy chain answers."""
+        fake_rag = make_fake_rag(stream_tokens=["LEGACY"])
+
+        class NumberThenFail:
+            async def astream(self, payload, stream_mode=None):
+                fake_rag.turn_passages.get().append(("stale", "agent.pdf"))
+                yield ("updates", {})
+                raise RuntimeError("413 rate limit")
+
+        self._use_agent(NumberThenFail())
+        with inject_services(
+            rag_service=fake_rag, embed_service=make_fake_embed(docs=[])
+        ), self.assertLogs(agent_service.logger, level="ERROR"):
+            result = _collect(agent_service.astream_answer("q", "s6"))
+
+        self.assertEqual(
+            result[-1], ("done", {"session_id": "s6", "answer": "LEGACY", "tools_used": [], "sources": []})
+        )
+
+    def test_astream_legacy_sync_fallback_restarts_numbering(self):
+        """A legacy stream that breaks re-answers synchronously, numbering from [1] again."""
+        self._use_agent(None)
+        fake_rag = make_fake_rag()
+
+        class BrokenChain:
+            async def astream(self, payload):
+                yield "partial"
+                raise RuntimeError("stream broke")
+
+        def numbering_format_context(documents):
+            fake_rag.turn_passages.get().append(("streamed", "streamed.pdf"))
+            return ""
+
+        def sync_answer(question, session_id):
+            fake_rag.turn_passages.get().append(("sync", "sync.pdf"))
+            return "SYNC [1]"
+
+        fake_rag.chain, fake_rag.format_context, fake_rag.answer_question = (
+            BrokenChain(), numbering_format_context, sync_answer
+        )
+        with inject_services(
+            rag_service=fake_rag, embed_service=make_fake_embed(docs=[])
+        ), self.assertLogs(agent_service.logger, level="ERROR"):
+            result = _collect(agent_service.astream_answer("q", "s7"))
+
+        self.assertEqual(result[-1][1]["sources"], [("sync", "sync.pdf")])
 
     def test_astream_answer_exhaustive_bypass(self):
         """Exhaustive requests emit a single all-records token and never touch

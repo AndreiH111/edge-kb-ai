@@ -172,8 +172,10 @@ curl -X POST http://127.0.0.1:8000/ai/chat \
 ```
 
 ```json
-{"session_id": "uuid-here", "question": "What internships are available?", "answer": "Based on the documents...", "tools_used": ["search_knowledge_base"]}
+{"session_id": "uuid-here", "question": "What internships are available?", "answer": "Based on the documents... [1]", "tools_used": ["search_knowledge_base"], "sources": [{"n": 1, "locator": "interns.xlsx (sheet Sheet1, row 5)"}]}
 ```
+
+`sources` lists only the passages the answer cites as `[n]` (numbered once per turn, across every search), or `null` when it cites none (`[]` in the stream's `done` event). Spreadsheet rows show their sheet row number (header on row 1); after upgrading, run `POST /ai/reindex` once so stored rows' text shows sheet row numbers too.
 
 Add `"filename": "report.pdf"` to either chat endpoint's body to answer only from that indexed file.
 
@@ -200,7 +202,7 @@ event: token
 data: {"text": "the documents..."}
 
 event: done
-data: {"session_id": "uuid-here", "answer": "Based on the documents...", "tools_used": ["search_knowledge_base"]}
+data: {"session_id": "uuid-here", "answer": "Based on the documents... [1]", "tools_used": ["search_knowledge_base"], "sources": [{"n": 1, "locator": "interns.xlsx (sheet Sheet1, row 5)"}]}
 ```
 
 **Check agent / Jira status:**

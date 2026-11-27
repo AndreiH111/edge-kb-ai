@@ -1,4 +1,4 @@
-"""Tests for ``rag_service.format_context``: numbered passages with citation locators.
+"""Tests for ``rag_service.format_context`` / ``cited_sources``: numbered passages with citation locators.
 
 ``rag_service`` does ``from services import embed_service`` at module top, so the
 module is executed under a private name with a fake ``embed_service`` injected
@@ -41,14 +41,14 @@ class FormatContextTests(unittest.TestCase):
 
     def test_excel_row_locator(self) -> None:
         doc = Document(page_content="r", metadata={"source": "sheet.xlsx", "sheet": "Data", "row": 12})
-        self.assertEqual(self.fmt(doc), "[1] sheet.xlsx (sheet Data, row 12)\nr")
+        self.assertEqual(self.fmt(doc), "[1] sheet.xlsx (sheet Data, row 14)\nr")  # 0-based index 12 = sheet row 14
 
     def test_excel_row_range_wins_over_row(self) -> None:
         doc = Document(
             page_content="r",
             metadata={"source": "sheet.xlsx", "sheet": "Data", "row": 12, "row_range": "12-20"},
         )
-        self.assertEqual(self.fmt(doc), "[1] sheet.xlsx (sheet Data, rows 12-20)\nr")
+        self.assertEqual(self.fmt(doc), "[1] sheet.xlsx (sheet Data, rows 14-22)\nr")
 
     def test_powerpoint_slide_locator(self) -> None:
         doc = Document(page_content="s", metadata={"source": "deck.pptx", "slide": 4})
@@ -68,6 +68,25 @@ class FormatContextTests(unittest.TestCase):
     def test_dedupes_by_content_when_id_missing(self) -> None:
         doc = Document(page_content="same", metadata={"source": "a.pdf", "page": 1})
         self.assertEqual(self.fmt(doc, doc), "[1] a.pdf (page 1)\nsame")
+
+    def test_numbering_continues_across_a_turn_and_reuses_numbers(self) -> None:
+        a, b, c = (Document(page_content=x, metadata={"source": f"{x}.pdf"}, id=x) for x in "abc")
+        passages = []
+        self.addCleanup(self.module.turn_passages.reset, self.module.turn_passages.set(passages))
+
+        self.assertEqual(self.fmt(a, b), "[1] a.pdf\na\n\n[2] b.pdf\nb")
+        self.assertEqual(self.fmt(c, b), "[3] c.pdf\nc\n\n[2] b.pdf\nb")  # second search: b keeps [2]
+        self.assertEqual(passages, [("a", "a.pdf"), ("b", "b.pdf"), ("c", "c.pdf")])
+
+    def test_cited_sources_keeps_only_cited_numbers_of_the_turn(self) -> None:
+        self.assertEqual(self.module.cited_sources("[1]"), [])  # no turn: nothing numbered
+        turn = [("a", "a.pdf"), ("b", "b.xlsx (sheet S, row 5)"), ("c", "c.pdf (page 2)")]
+        self.addCleanup(self.module.turn_passages.reset, self.module.turn_passages.set(turn))
+
+        self.assertEqual(
+            self.module.cited_sources("Per [2] and [3, 9], not 1 or items[x]."),
+            [{"n": 2, "locator": "b.xlsx (sheet S, row 5)"}, {"n": 3, "locator": "c.pdf (page 2)"}],
+        )
 
 
 if __name__ == "__main__":
