@@ -43,7 +43,9 @@ def row_to_document(file_path: Path, sheet_name: str, row_index: int, row) -> Do
         [
             f"Source file: {file_path.name}",
             f"Sheet: {sheet_name}",
-            f"Row: {row_index}",
+            # Sheet row; ids and metadata keep the 0-based index. shortcut: index + 2 assumes the
+            # header is on row 1, store real sheet rows here if titles sit above it.
+            f"Row: {row_index + 2}",
             *fields,
         ]
     )

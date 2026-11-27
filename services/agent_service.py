@@ -88,10 +88,11 @@ def system_prompt(request: ModelRequest) -> str:
 
 @dataclass
 class AgentResult:
-    """The outcome of an agent turn: the answer plus which tools it called."""
+    """The outcome of an agent turn: the answer, which tools it called and the passages it cited."""
 
     answer: str
     tools_used: List[str] = field(default_factory=list)
+    sources: List[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -346,9 +347,14 @@ async def _aanswer_question(question: str, session_id: str) -> AgentResult:
         rag_service.add_chat_history(history, question, answer)
         return AgentResult(answer=answer, tools_used=[])
 
+    # One [n] numbering per turn: tool threads copy this context, so they share the list.
+    # No reset: each request runs in its own task, and every turn sets a fresh list.
+    passages: list = []
+    rag_service.turn_passages.set(passages)
+
     if _agent is None:
         answer = await asyncio.to_thread(rag_service.answer_question, question, session_id)
-        return AgentResult(answer=answer, tools_used=[])
+        return AgentResult(answer=answer, tools_used=[], sources=rag_service.cited_sources(answer))
 
     messages = [*rag_service.recent_messages(history), HumanMessage(content=question)]
 
@@ -356,13 +362,14 @@ async def _aanswer_question(question: str, session_id: str) -> AgentResult:
         result = await _agent.ainvoke({"messages": messages})
     except Exception:
         logger.exception("Agent invocation failed; falling back to legacy RAG chain.")
+        passages.clear()
         answer = await asyncio.to_thread(rag_service.answer_question, question, session_id)
-        return AgentResult(answer=answer, tools_used=[])
+        return AgentResult(answer=answer, tools_used=[], sources=rag_service.cited_sources(answer))
 
     answer = _extract_answer(result)
     tools_used = _extract_tools_used(result.get("messages", []))
     rag_service.add_chat_history(history, question, answer)
-    return AgentResult(answer=answer, tools_used=tools_used)
+    return AgentResult(answer=answer, tools_used=tools_used, sources=rag_service.cited_sources(answer))
 
 
 async def astream_answer(
@@ -374,7 +381,8 @@ async def astream_answer(
     - ``token`` — an incremental piece of the answer text (``{"text": ...}``).
     - ``tool``  — a tool the agent invoked, emitted once per unique tool
       (``{"name": ...}``).
-    - ``done``  — the final payload (``{"session_id", "answer", "tools_used"}``).
+    - ``done``  — the final payload (``{"session_id", "answer", "tools_used", "sources"}``);
+      ``sources`` is ``[{"n", "locator"}]`` for each passage the answer cites as ``[n]``.
     - ``error`` — a mid-stream failure *after* tokens already started.
 
     Mirrors ``aanswer_question``: same exhaustive fast-path, and the same legacy
@@ -401,8 +409,12 @@ async def _astream_answer(question: str, session_id: str) -> AsyncIterator[Tuple
         answer = rag_service.format_all_records()
         rag_service.add_chat_history(history, question, answer)
         yield ("token", {"text": answer})
-        yield ("done", {"session_id": session_id, "answer": answer, "tools_used": []})
+        yield ("done", {"session_id": session_id, "answer": answer, "tools_used": [], "sources": []})
         return
+
+    # Same per-turn numbering as _aanswer_question.
+    passages: list = []
+    rag_service.turn_passages.set(passages)
 
     if _agent is None:
         async for event in _astream_legacy(question, session_id):
@@ -445,6 +457,7 @@ async def _astream_answer(question: str, session_id: str) -> AsyncIterator[Tuple
         if not started:
             # Nothing emitted yet — fall back to the legacy chain, consistent
             # with aanswer_question's behaviour on invocation failure.
+            passages.clear()
             async for event in _astream_legacy(question, session_id):
                 yield event
             return
@@ -455,7 +468,8 @@ async def _astream_answer(question: str, session_id: str) -> AsyncIterator[Tuple
 
     answer = "".join(parts).strip()
     rag_service.add_chat_history(history, question, answer)
-    yield ("done", {"session_id": session_id, "answer": answer, "tools_used": tools_used})
+    sources = rag_service.cited_sources(answer)
+    yield ("done", {"session_id": session_id, "answer": answer, "tools_used": tools_used, "sources": sources})
 
 
 async def _astream_legacy(
@@ -492,13 +506,16 @@ async def _astream_legacy(
             yield ("token", {"text": chunk})
     except Exception:
         logger.exception("Legacy streaming failed; using the synchronous fallback.")
+        rag_service.turn_passages.get().clear()
         answer = await asyncio.to_thread(
             rag_service.answer_question, question, session_id
         )
+        sources = rag_service.cited_sources(answer)
         yield ("token", {"text": answer})
-        yield ("done", {"session_id": session_id, "answer": answer, "tools_used": []})
+        yield ("done", {"session_id": session_id, "answer": answer, "tools_used": [], "sources": sources})
         return
 
     answer = "".join(parts).strip()
     rag_service.add_chat_history(history, question, answer)
-    yield ("done", {"session_id": session_id, "answer": answer, "tools_used": []})
+    sources = rag_service.cited_sources(answer)
+    yield ("done", {"session_id": session_id, "answer": answer, "tools_used": [], "sources": sources})
