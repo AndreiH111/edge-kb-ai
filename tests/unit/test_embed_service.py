@@ -82,6 +82,33 @@ class RetrieveFromAllSourcesTests(unittest.TestCase):
             filter={"source": "Internships_2024.xlsx"},
         )
 
+    def test_explicit_k_sizes_one_pool_searches_only(self) -> None:
+        """The agent's bigger rerank pool: ``k`` sizes the search of all files or of one file;
+        several named files keep RETRIEVER_K_PER_SOURCE each, and whole files ignore it."""
+        resort = [_doc("Resort1.xlsx", "r1"), _doc("Resort1.xlsx", "r2")]
+        self.module.documents = resort + [_doc("Internships_2024.xlsx", "x" * 50), _doc("handbook.pdf", "y" * 50)]
+        tight = self.module.settings.model_copy(
+            update={"hybrid_search_enabled": False, "retriever_max_file_chars": 10}
+        )
+
+        with patch.object(self.module, "settings", tight):
+            self.module.retrieve_from_all_sources("quokka", k=15)
+            self.store.similarity_search.assert_called_with("quokka", k=15)
+            self.module.retrieve_from_all_sources("Which internships are remote?", k=15)
+            self.store.similarity_search.assert_called_with(
+                "Which internships are remote?", k=15, filter={"source": "Internships_2024.xlsx"}
+            )
+            with self.module.use_source("handbook.pdf"):
+                self.module.retrieve_from_all_sources("policy", k=15)
+            self.store.similarity_search.assert_called_with("policy", k=15, filter={"source": "handbook.pdf"})
+            self.module.retrieve_from_all_sources("Compare internships with the handbook", k=15)
+            self.store.similarity_search.assert_called_with(
+                "Compare internships with the handbook", k=tight.retriever_k_per_source,
+                filter={"source": "handbook.pdf"},
+            )
+            with self.module.use_source("Resort1.xlsx"):
+                self.assertEqual(self.module.retrieve_from_all_sources("policy", k=1), resort)
+
     def test_global_search_fuses_bm25_and_vector_results(self) -> None:
         doc_a = _doc("a.pdf", "unrelated vector hit")
         doc_b = _doc("b.pdf", "habitat notes")

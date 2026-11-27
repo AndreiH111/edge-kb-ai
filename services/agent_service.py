@@ -13,6 +13,7 @@ already imports ``rag_service``) and essential for unit tests.
 import asyncio
 import contextlib
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import AsyncIterator, List, Optional, Tuple
 
@@ -82,6 +83,11 @@ def get_agent_status() -> AgentStatus:
     return _status
 
 
+# The user's own words for this chat turn, set by the public wrappers below, so the search
+# tool's retrieval graph judges passages against the question and not only its query.
+user_question: ContextVar[Optional[str]] = ContextVar("user_question", default=None)
+
+
 @tool
 def search_knowledge_base(query: str) -> str:
     """Search the uploaded documents (Excel/PDF/PowerPoint) for information
@@ -89,11 +95,18 @@ def search_knowledge_base(query: str) -> str:
     contents. Returns the most relevant passages, or a message if none match."""
     from services import rag_graph, rag_service
 
-    documents = rag_graph.retrieve(query)
+    documents = rag_graph.retrieve(query, question=user_question.get())
     if not documents:
         return "No relevant context found in the knowledge base."
 
-    return rag_service.format_context(documents)
+    context = rag_service.format_context(documents)
+    if any(doc.metadata.get("low_relevance") for doc in documents):
+        return (
+            "Note: no passage below was judged relevant to the question. Unless they clearly answer "
+            "it, say the knowledge base doesn't seem to contain the answer instead of guessing.\n\n"
+            + context
+        )
+    return context
 
 
 @tool
@@ -278,6 +291,7 @@ async def aanswer_question(
 
     # asyncio.to_thread and LangChain's executor copy context vars, so the pin
     # reaches retrieval running in worker threads too.
+    user_question.set(question)  # no reset: each request runs in its own asyncio task context
     with embed_service.use_source(source):
         return await _aanswer_question(question, session_id)
 
@@ -332,6 +346,7 @@ async def astream_answer(
     """
     from services import embed_service
 
+    user_question.set(question)  # no reset: each request runs in its own asyncio task context
     with embed_service.use_source(source):
         async for event in _astream_answer(question, session_id):
             yield event

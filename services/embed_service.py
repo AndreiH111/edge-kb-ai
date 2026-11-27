@@ -249,7 +249,7 @@ def _search(query: str, k: int, source: Optional[str] = None) -> List[Document]:
     return fuse_rrf([lexical, semantic])[:k]
 
 
-def _retrieve_source(query: str, source: str) -> List[Document]:
+def _retrieve_source(query: str, source: str, k: Optional[int] = None) -> List[Document]:
     """Passages from one file: the whole file when it fits, otherwise a search of that file."""
     named_documents = [
         document for document in documents if document.metadata.get("source") == source
@@ -258,20 +258,28 @@ def _retrieve_source(query: str, source: str) -> List[Document]:
         return []
     if sum(len(document.page_content) for document in named_documents) <= settings.retriever_max_file_chars:
         return named_documents
-    return _search(query, settings.retriever_k_per_source, source)
+    return _search(query, k or settings.retriever_k_per_source, source)
 
 
-def retrieve_from_all_sources(query: str) -> List[Document]:
+def retrieve_from_all_sources(query: str, k: Optional[int] = None) -> List[Document]:
+    """Passages for ``query``.
+
+    ``k`` replaces RETRIEVER_K / RETRIEVER_K_PER_SOURCE when one pool is searched (all files, or
+    one pinned or named file); several named files keep RETRIEVER_K_PER_SOURCE each, so one
+    file can't crowd the others out. Whole files ignore it.
+    """
     if not documents:
         return []
 
     source = pinned_source.get()
     if source:
-        return _retrieve_source(query, source)
+        return _retrieve_source(query, source, k)
 
     matched_sources = get_sources_matching_query(query)
     if not matched_sources:
-        return _search(query, settings.retriever_k)
+        return _search(query, k or settings.retriever_k)
+    if len(matched_sources) == 1:
+        return _retrieve_source(query, matched_sources[0], k)
 
     # Small named files go in whole so filtered questions ("which internships
     # are remote?") see every row; the character budget keeps the prompt bounded.

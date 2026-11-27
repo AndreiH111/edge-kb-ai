@@ -163,7 +163,7 @@ def make_fake_embed(*, docs=None, sources=None):
 def make_fake_rag_graph(*, docs=None) -> types.ModuleType:
     """Build a stand-in for ``services.rag_graph``."""
     module = types.ModuleType("services.rag_graph")
-    module.retrieve = lambda question: list(docs or [])
+    module.retrieve = lambda query, question=None: list(docs or [])
     return module
 
 
@@ -344,7 +344,7 @@ class AgentInvocationTests(unittest.TestCase):
 
 class KnowledgeBaseToolTests(unittest.TestCase):
     def test_search_returns_formatted_context(self):
-        docs = [SimpleNamespace(page_content="internship at ACME")]
+        docs = [SimpleNamespace(page_content="internship at ACME", metadata={})]
         with inject_services(
             rag_graph=make_fake_rag_graph(docs=docs),
             rag_service=make_fake_rag(),
@@ -361,6 +361,41 @@ class KnowledgeBaseToolTests(unittest.TestCase):
             result = agent_service.search_knowledge_base.invoke({"query": "nothing"})
 
         self.assertEqual(result, "No relevant context found in the knowledge base.")
+
+    def test_search_warns_when_every_passage_was_graded_out(self):
+        docs = [SimpleNamespace(page_content="cafeteria menu", metadata={"low_relevance": True})]
+        with inject_services(
+            rag_graph=make_fake_rag_graph(docs=docs),
+            rag_service=make_fake_rag(),
+        ):
+            result = agent_service.search_knowledge_base.invoke({"query": "parental leave"})
+
+        self.assertTrue(result.startswith("Note: no passage below was judged relevant"))
+        self.assertTrue(result.endswith("\n\ncafeteria menu"))
+
+    def test_search_passes_the_users_question_to_retrieval(self):
+        """aanswer_question exposes the user's words; the tool (in a worker thread) passes them on."""
+        calls = []
+        graph = make_fake_rag_graph()
+        graph.retrieve = lambda query, question=None: calls.append((query, question)) or []
+        tool_call = {
+            "name": "search_knowledge_base",
+            "args": {"query": "interns in Cebu"},
+            "id": "call_1",
+            "type": "tool_call",
+        }
+        model = FakeToolCallingModel(
+            messages=iter([AIMessage(content="", tool_calls=[tool_call]), AIMessage(content="Cebu")])
+        )
+        self.addCleanup(setattr, agent_service, "_agent", agent_service._agent)
+        agent_service._agent = create_agent(model, [agent_service.search_knowledge_base])
+
+        with inject_services(
+            rag_graph=graph, rag_service=make_fake_rag(), embed_service=make_fake_embed()
+        ):
+            asyncio.run(agent_service.aanswer_question("And in Cebu?", "s5"))
+
+        self.assertEqual(calls, [("interns in Cebu", "And in Cebu?")])
 
     def test_list_sources_lists_files(self):
         with inject_services(embed_service=make_fake_embed(sources=["a.pdf", "b.xlsx"])):
