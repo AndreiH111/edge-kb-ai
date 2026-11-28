@@ -19,7 +19,7 @@ A FastAPI-based retrieval-augmented generation (RAG) application. Upload documen
 - **Source-aware retrieval** — Retrieves relevant context across all indexed files; passages are numbered with file/page/sheet/slide locators so answers can cite them as `[n]`
 - **Hybrid search** — BM25 lexical ranking fused with vector similarity (reciprocal rank fusion), so exact identifiers and rare terms are not lost to embeddings
 - **Self-corrective retrieval** — The agent's knowledge-base search is a LangGraph graph: an LLM grades the passages, rewrites the query and retries when nothing is relevant, then reranks the results (`RAG_*` settings)
-- **Agentic chat** — The LLM decides which tools to call (search the knowledge base, or query Jira read-only via an MCP server) instead of a fixed retrieve-then-answer flow, with automatic fallback to the classic RAG chain
+- **Agentic chat** — The LLM decides which tools to call (search the knowledge base, compute exact counts, totals, averages, group-bys and top-N over every row of an Excel workbook with `query_spreadsheet`, or query Jira read-only via an MCP server) instead of a fixed retrieve-then-answer flow, with automatic fallback to the classic RAG chain
 - **Streaming (SSE)** — `POST /ai/chat/stream` streams replies token-by-token as Server-Sent Events (`tool`, `token`, `done`, `error`)
 
 ## System Architecture
@@ -172,8 +172,10 @@ curl -X POST http://127.0.0.1:8000/ai/chat \
 ```
 
 ```json
-{"session_id": "uuid-here", "question": "What internships are available?", "answer": "Based on the documents...", "tools_used": ["search_knowledge_base"]}
+{"session_id": "uuid-here", "question": "What internships are available?", "answer": "Based on the documents... [1]", "tools_used": ["search_knowledge_base"], "sources": [{"n": 1, "locator": "interns.xlsx (sheet Sheet1, row 5)"}]}
 ```
+
+`sources` lists only the passages the answer cites as `[n]` (numbered once per turn, across every search), or `null` when it cites none (`[]` in the stream's `done` event). Spreadsheet rows show their sheet row number (header on row 1); after upgrading, run `POST /ai/reindex` once so stored rows' text shows sheet row numbers too.
 
 Add `"filename": "report.pdf"` to either chat endpoint's body to answer only from that indexed file.
 
@@ -200,7 +202,7 @@ event: token
 data: {"text": "the documents..."}
 
 event: done
-data: {"session_id": "uuid-here", "answer": "Based on the documents...", "tools_used": ["search_knowledge_base"]}
+data: {"session_id": "uuid-here", "answer": "Based on the documents... [1]", "tools_used": ["search_knowledge_base"], "sources": [{"n": 1, "locator": "interns.xlsx (sheet Sheet1, row 5)"}]}
 ```
 
 **Check agent / Jira status:**
@@ -210,7 +212,7 @@ curl http://127.0.0.1:8000/ai/agent-status
 ```
 
 ```json
-{"agent_enabled": true, "agent_ready": true, "jira_enabled": false, "jira_loaded": false, "tool_count": 2, "tools": ["search_knowledge_base", "list_knowledge_base_sources"], "jira_error": null}
+{"agent_enabled": true, "agent_ready": true, "jira_enabled": false, "jira_loaded": false, "tool_count": 3, "tools": ["search_knowledge_base", "list_knowledge_base_sources", "query_spreadsheet"], "jira_error": null}
 ```
 
 **List files:**

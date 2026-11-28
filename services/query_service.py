@@ -23,7 +23,8 @@ _LIST_MARKER = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
 
 CONDENSE_PROMPT = """Rewrite the follow-up question as a standalone search question that includes \
 every name, entity, time period and detail it refers to from the chat history. \
-Return only the rewritten question.
+If the question is already standalone or starts a new topic, return it unchanged. \
+Return only the question.
 
 Chat history:
 {history}

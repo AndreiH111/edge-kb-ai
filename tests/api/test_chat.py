@@ -110,6 +110,26 @@ class TestChat:
         assert resp.status_code == 200
         assert resp.json()["tools_used"] is None
 
+    def test_sources_list_only_cited_passages(self, client, monkeypatch):
+        """Real legacy chain: ``sources`` keeps only the passages cited as ``[n]``, with sheet
+        row numbers (0-based index + 2); an answer citing none gets null, like ``tools_used``."""
+        from langchain_core.documents import Document
+        from services import query_service, rag_service  # after ``client`` injected the fake embed_service
+
+        docs = [
+            Document("Name: Ana", metadata={"source": "interns.xlsx", "sheet": "Sheet1", "row": 3}, id="a"),
+            Document("Name: Ben", metadata={"source": "interns.xlsx", "sheet": "Sheet1", "row": 7}, id="b"),
+        ]
+        monkeypatch.setattr(agent_service, "_agent", None)
+        monkeypatch.setattr(query_service, "build_retrieval_documents", lambda question, history, llm: docs)
+        monkeypatch.setattr(rag_service, "chain", SimpleNamespace(invoke=lambda payload: "Ben is in Cebu [2]."))
+
+        resp = client.post("/ai/chat", json={"question": "Who is in Cebu?"})
+        assert resp.json()["sources"] == [{"n": 2, "locator": "interns.xlsx (sheet Sheet1, row 9)"}]
+
+        monkeypatch.setattr(rag_service, "chain", SimpleNamespace(invoke=lambda payload: "No idea."))
+        assert client.post("/ai/chat", json={"question": "Who?"}).json()["sources"] is None
+
     def test_missing_question_returns_400(self, client, monkeypatch):
         monkeypatch.setattr(agent_service, "aanswer_question", _fake_answer())
         resp = client.post("/ai/chat")
@@ -257,6 +277,30 @@ class TestChatStream:
         assert done["session_id"] == "s-stream"
         assert done["answer"] == "Hello"
         assert done["tools_used"] == ["search_knowledge_base"]
+
+    def test_stream_done_carries_cited_sources(self, client, monkeypatch):
+        """Real legacy stream: the ``done`` frame lists the passages the answer cites."""
+        from langchain_core.documents import Document
+        from services import query_service, rag_service  # after ``client`` injected the fake embed_service
+
+        async def astream(payload):
+            yield "Ana [1]"
+
+        doc = Document("Name: Ana", metadata={"source": "interns.xlsx", "sheet": "Sheet1", "row": 3})
+        monkeypatch.setattr(agent_service, "_agent", None)
+        monkeypatch.setattr(query_service, "build_retrieval_documents", lambda question, history, llm: [doc])
+        monkeypatch.setattr(rag_service, "chain", SimpleNamespace(astream=astream))
+
+        resp = client.post("/ai/chat/stream", json={"question": "Who?", "session_id": "s-src"})
+        assert _parse_sse(resp.text)[-1] == (
+            "done",
+            {
+                "session_id": "s-src",
+                "answer": "Ana [1]",
+                "tools_used": [],
+                "sources": [{"n": 1, "locator": "interns.xlsx (sheet Sheet1, row 5)"}],
+            },
+        )
 
     def test_stream_surfaces_error_frame(self, client, monkeypatch):
         async def fake_astream(question, session_id, source=None):

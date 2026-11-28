@@ -71,6 +71,7 @@ async def ask_question(
         question=user_question,
         answer=result.answer,
         tools_used=result.tools_used or None,
+        sources=result.sources or None,
     )
 
 

@@ -141,13 +141,13 @@ Tuning parameters for the retrieval pipeline and chat session memory.
 | `RETRIEVER_SCORE_THRESHOLD` | — | Unset = off. Keep only chunks whose relevance score is at least this value (`similarity` only). Chroma-only; see the Vector Store section before enabling |
 | `HYBRID_SEARCH_ENABLED` | `true` | Fuse a stdlib BM25 lexical ranking of the in-memory corpus with the vector search (reciprocal rank fusion) so exact codes and rare words rank first. `false` restores pure vector search |
 | `HYBRID_CANDIDATES` | `20` | Candidates fetched from each of BM25 and the vector store before fusion; the top `RETRIEVER_K` / `RETRIEVER_K_PER_SOURCE` of the fused list are returned |
-| `QUERY_REWRITE_ENABLED` | `true` | On the classic RAG path, rewrite a follow-up question plus the chat history into one standalone retrieval question with the LLM (the first question of a session is never rewritten). `false` (or a failed rewrite) keeps the previous behaviour: chat history and question are searched together |
+| `QUERY_REWRITE_ENABLED` | `true` | On the classic RAG path, rewrite a follow-up question plus the chat history into one standalone retrieval question with the LLM (the first question of a session is never rewritten, and a question that is already standalone or starts a new topic is kept as is). `false` (or a failed rewrite) keeps the previous behaviour: chat history and question are searched together |
 | `MULTI_QUERY_COUNT` | `1` | Total retrieval queries per question: the (rewritten) question plus up to `N-1` LLM paraphrases; results are unioned and de-duplicated. `1` disables paraphrasing. Each extra query adds one LLM call and can grow the retrieved context up to N times |
 | `MAX_CHAT_HISTORY_MESSAGES` | `12` | Messages retained per chat session |
 | `MAX_CHAT_HISTORY_CONTENT_CHARS` | `2000` | Max characters kept per history message |
 | `RAG_GRADING_ENABLED` | `true` | Agent knowledge-base search: one LLM call grades each retrieved passage yes/no and drops irrelevant ones. Named small files sent whole are never graded |
-| `RAG_MAX_RETRIES` | `1` | When grading finds nothing relevant, how many times the LLM rewrites the query and searches again. After the last retry the graded-out passages are returned rather than nothing |
-| `RAG_RERANK_ENABLED` | `true` | Agent knowledge-base search: one LLM call reorders the passages by relevance, then keeps the top `RAG_RERANK_TOP_N` |
+| `RAG_MAX_RETRIES` | `1` | When grading finds nothing relevant, how many times the LLM rewrites the query and searches again. After the last retry the graded-out passages are returned rather than nothing, flagged so the model is told the knowledge base doesn't seem to contain the answer |
+| `RAG_RERANK_ENABLED` | `true` | Agent knowledge-base search: one LLM call reorders the passages by relevance, then keeps the top `RAG_RERANK_TOP_N`. With rerank on (and `RAG_RERANK_TOP_N` > 0), a search of all files or of one file gathers `max(RETRIEVER_K, 3 × RAG_RERANK_TOP_N)` candidates before grading and reranking |
 | `RAG_RERANK_TOP_N` | `5` | Passages kept after a successful rerank (`0` = keep all). Questions naming several large files get `RETRIEVER_K_PER_SOURCE` passages per file, so a low value can drop a file from a comparison; raise it (or use `0`) if you compare many files |
 
 ---

@@ -12,13 +12,18 @@ already imports ``rag_service``) and essential for unit tests.
 
 import asyncio
 import contextlib
+import json
 import logging
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import AsyncIterator, List, Optional, Tuple
+from datetime import date
+from typing import AsyncIterator, List, Literal, Optional, Tuple, Union
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelRequest, dynamic_prompt
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langchain_core.tools import tool
+from pydantic import BaseModel
 
 from core.config import settings
 
@@ -29,30 +34,66 @@ logger = logging.getLogger(__name__)
 _agent = None
 
 
-SYSTEM_PROMPT = """You are an expert assistant for the edge-kb knowledge base. You can also query Jira (read-only).
+# Indexed files named in the system prompt; the rest are summarised as "+N more".
+MAX_PROMPT_SOURCES = 30
 
-IMPORTANT: You have NO prior knowledge of this user's Jira instance or their uploaded documents. You MUST call the appropriate tool to answer any question about them. Never answer such a question from memory, and never claim you lack the information before you have actually called a tool.
+PROMPT_RULES = """Rules:
+- You know nothing about the user's data except what your tools return. Call a tool before answering any question \
+about it, and never say information is missing before you have searched.
+- Search with short standalone keyword queries; resolve names and references from the conversation. If results are \
+thin, search again with different wording. To compare items, search once per item.
+- Never estimate counts, totals or averages from a few passages: use a tool that computes over all rows if you have \
+one, otherwise say the passages may not cover every row.
+- If the results do not answer the question, or it needs a system none of your tools reach, say plainly what is \
+missing instead of guessing.
+- Reply in the user's language. Use markdown tables for multi-row data.
+- Cite the passages you used as [n] with their file name; do not cite passages you did not use."""
 
-Tools:
-- `search_knowledge_base`: search the uploaded documents (Excel, PDF, PowerPoint) for anything about their contents.
-- `list_knowledge_base_sources`: list which files are currently indexed.
-- Jira tools (e.g. `jira_get_all_projects`, `jira_search`, `jira_get_issue`, and the board/sprint tools, when available): answer questions about Jira projects, issues, sprints, or boards. Jira access is read-only.
 
-How to decide:
-- Any question about Jira (projects, issues, sprints, boards, or "my" items in Jira) -> call a Jira tool first.
-- Any question about the uploaded documents or knowledge base -> call `search_knowledge_base` first.
-- Only answer once a tool has returned. If a tool returns nothing useful, say so plainly instead of inventing an answer.
-- Use the conversation history to resolve follow-up questions and references to earlier messages.
-- Answer clearly and concisely. Cite the knowledge-base passages you used as [n] (as numbered in that search result) together with their file name, or name the Jira tool the information came from; do not cite passages you did not use.
-"""
+@dynamic_prompt
+def system_prompt(request: ModelRequest) -> str:
+    """Build the system prompt for one model call: date, files, bound tools, rules."""
+    from services import embed_service
+
+    tool_names = [t.get("name", "") if isinstance(t, dict) else t.name for t in request.tools]
+    # File names come from uploaders and the client: JSON-quote them so they stay data, not instructions.
+    pinned = embed_service.pinned_source.get()
+    if pinned:
+        files = (
+            f"The user pinned the file {json.dumps(pinned, ensure_ascii=False)}: "
+            "answer knowledge-base questions only from it."
+        )
+    else:
+        # shortcut: rescans every chunk per model call (~7 ms at 200k), cache it if the corpus grows far past that.
+        sources = embed_service.get_indexed_sources()
+        files = f"Indexed files: {json.dumps(sources[:MAX_PROMPT_SOURCES], ensure_ascii=False)}"
+        if len(sources) > MAX_PROMPT_SOURCES:
+            files += f" (+{len(sources) - MAX_PROMPT_SOURCES} more)"
+        files += "."
+
+    lines = [
+        "You are an expert assistant for the edge-kb knowledge base.",
+        # shortcut: server-local date, pass the client's time zone if users span zones.
+        f"Today is {date.today():%A, %d %B %Y}.",
+        files,
+        f"Your tools: {', '.join(tool_names)}.",
+    ]
+    if any(name.startswith("jira_") for name in tool_names):
+        lines.append(
+            "Jira tools are read-only: use them for Jira projects, issues, sprints and boards, "
+            "and decline any request to create, change or delete anything in Jira. "
+            "Cite Jira data by its issue or project key."
+        )
+    return "\n".join(lines) + "\n\n" + PROMPT_RULES
 
 
 @dataclass
 class AgentResult:
-    """The outcome of an agent turn: the answer plus which tools it called."""
+    """The outcome of an agent turn: the answer, which tools it called and the passages it cited."""
 
     answer: str
     tools_used: List[str] = field(default_factory=list)
+    sources: List[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -82,6 +123,11 @@ def get_agent_status() -> AgentStatus:
     return _status
 
 
+# The user's own words for this chat turn, set by the public wrappers below, so the search
+# tool's retrieval graph judges passages against the question and not only its query.
+user_question: ContextVar[Optional[str]] = ContextVar("user_question", default=None)
+
+
 @tool
 def search_knowledge_base(query: str) -> str:
     """Search the uploaded documents (Excel/PDF/PowerPoint) for information
@@ -89,11 +135,18 @@ def search_knowledge_base(query: str) -> str:
     contents. Returns the most relevant passages, or a message if none match."""
     from services import rag_graph, rag_service
 
-    documents = rag_graph.retrieve(query)
+    documents = rag_graph.retrieve(query, question=user_question.get())
     if not documents:
         return "No relevant context found in the knowledge base."
 
-    return rag_service.format_context(documents)
+    context = rag_service.format_context(documents)
+    if any(doc.metadata.get("low_relevance") for doc in documents):
+        return (
+            "Note: no passage below was judged relevant to the question. Unless they clearly answer "
+            "it, say the knowledge base doesn't seem to contain the answer instead of guessing.\n\n"
+            + context
+        )
+    return context
 
 
 @tool
@@ -113,7 +166,54 @@ def list_knowledge_base_sources() -> str:
 
 
 def _knowledge_base_tools() -> list:
-    return [search_knowledge_base, list_knowledge_base_sources]
+    return [search_knowledge_base, list_knowledge_base_sources, query_spreadsheet]
+
+
+class SpreadsheetFilter(BaseModel):
+    """Keep only the rows where ``column <op> value``."""
+
+    column: str
+    op: Literal["==", "!=", ">", ">=", "<", "<=", "contains"]
+    value: Union[str, int, float]
+
+
+@tool
+def query_spreadsheet(
+    file: Optional[str] = None,
+    sheet: Optional[str] = None,
+    filters: Optional[List[SpreadsheetFilter]] = None,
+    group_by: Optional[str] = None,
+    aggregate: Optional[Literal["count", "sum", "mean", "min", "max"]] = None,
+    column: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    descending: bool = False,
+    limit: int = 20,
+) -> str:
+    """Compute exact answers over EVERY row of an indexed Excel workbook. Use this,
+    not `search_knowledge_base` (which only sees a few rows), for counts, totals,
+    averages, min/max, group-bys, top-N and complete row lists.
+
+    `file` is the workbook's file name (it defaults to the file the chat is pinned
+    to); `sheet` defaults to the first sheet. Rows must match every filter: numbers
+    compare numerically, text ignoring case, dates as YYYY-MM-DD text. `group_by`
+    alone counts rows per group; aggregate sum/mean/min/max needs `column`.
+    `sort_by` (with `descending` for top-N) orders the rows or groups and `limit`
+    caps them (default 20, max 200). Each result starts with the sheet, its row
+    count and its column names."""
+    try:
+        from services import embed_service, excel_service
+
+        workbooks = {path.name: path for path in excel_service.get_excel_files()}
+        pinned = embed_service.pinned_source.get()
+        if pinned:  # a chat pinned to one file must not read any other
+            workbooks = {name: path for name, path in workbooks.items() if name == pinned}
+        path = workbooks.get(file or pinned)
+        if path is None:
+            return f"Unknown or missing `file`. Indexed workbooks: {', '.join(workbooks) or 'none'}."
+        rules = [(rule.column, rule.op, rule.value) for rule in filters or []]
+        return excel_service.query_sheet(path, sheet, rules, group_by, aggregate, column, sort_by, descending, limit)
+    except Exception as exc:  # noqa: BLE001 - a raised tool error would abort the agent into the legacy chain
+        return f"query_spreadsheet failed: {exc}"
 
 
 def _jira_mcp_config() -> dict:
@@ -206,7 +306,7 @@ async def lifespan_agent():
 
         try:
             _agent = create_agent(
-                rag_service.create_llm(), tools, system_prompt=SYSTEM_PROMPT
+                rag_service.create_llm(), tools, middleware=[system_prompt]
             )
             logger.info("Agentic chat ready with %d tool(s).", len(tools))
         except Exception as exc:  # noqa: BLE001 - fall back to the legacy chain
@@ -278,6 +378,7 @@ async def aanswer_question(
 
     # asyncio.to_thread and LangChain's executor copy context vars, so the pin
     # reaches retrieval running in worker threads too.
+    user_question.set(question)  # no reset: each request runs in its own asyncio task context
     with embed_service.use_source(source):
         return await _aanswer_question(question, session_id)
 
@@ -294,9 +395,14 @@ async def _aanswer_question(question: str, session_id: str) -> AgentResult:
         rag_service.add_chat_history(history, question, answer)
         return AgentResult(answer=answer, tools_used=[])
 
+    # One [n] numbering per turn: tool threads copy this context, so they share the list.
+    # No reset: each request runs in its own task, and every turn sets a fresh list.
+    passages: list = []
+    rag_service.turn_passages.set(passages)
+
     if _agent is None:
         answer = await asyncio.to_thread(rag_service.answer_question, question, session_id)
-        return AgentResult(answer=answer, tools_used=[])
+        return AgentResult(answer=answer, tools_used=[], sources=rag_service.cited_sources(answer))
 
     messages = [*rag_service.recent_messages(history), HumanMessage(content=question)]
 
@@ -304,13 +410,14 @@ async def _aanswer_question(question: str, session_id: str) -> AgentResult:
         result = await _agent.ainvoke({"messages": messages})
     except Exception:
         logger.exception("Agent invocation failed; falling back to legacy RAG chain.")
+        passages.clear()
         answer = await asyncio.to_thread(rag_service.answer_question, question, session_id)
-        return AgentResult(answer=answer, tools_used=[])
+        return AgentResult(answer=answer, tools_used=[], sources=rag_service.cited_sources(answer))
 
     answer = _extract_answer(result)
     tools_used = _extract_tools_used(result.get("messages", []))
     rag_service.add_chat_history(history, question, answer)
-    return AgentResult(answer=answer, tools_used=tools_used)
+    return AgentResult(answer=answer, tools_used=tools_used, sources=rag_service.cited_sources(answer))
 
 
 async def astream_answer(
@@ -322,7 +429,8 @@ async def astream_answer(
     - ``token`` — an incremental piece of the answer text (``{"text": ...}``).
     - ``tool``  — a tool the agent invoked, emitted once per unique tool
       (``{"name": ...}``).
-    - ``done``  — the final payload (``{"session_id", "answer", "tools_used"}``).
+    - ``done``  — the final payload (``{"session_id", "answer", "tools_used", "sources"}``);
+      ``sources`` is ``[{"n", "locator"}]`` for each passage the answer cites as ``[n]``.
     - ``error`` — a mid-stream failure *after* tokens already started.
 
     Mirrors ``aanswer_question``: same exhaustive fast-path, and the same legacy
@@ -332,6 +440,7 @@ async def astream_answer(
     """
     from services import embed_service
 
+    user_question.set(question)  # no reset: each request runs in its own asyncio task context
     with embed_service.use_source(source):
         async for event in _astream_answer(question, session_id):
             yield event
@@ -348,8 +457,12 @@ async def _astream_answer(question: str, session_id: str) -> AsyncIterator[Tuple
         answer = rag_service.format_all_records()
         rag_service.add_chat_history(history, question, answer)
         yield ("token", {"text": answer})
-        yield ("done", {"session_id": session_id, "answer": answer, "tools_used": []})
+        yield ("done", {"session_id": session_id, "answer": answer, "tools_used": [], "sources": []})
         return
+
+    # Same per-turn numbering as _aanswer_question.
+    passages: list = []
+    rag_service.turn_passages.set(passages)
 
     if _agent is None:
         async for event in _astream_legacy(question, session_id):
@@ -392,6 +505,7 @@ async def _astream_answer(question: str, session_id: str) -> AsyncIterator[Tuple
         if not started:
             # Nothing emitted yet — fall back to the legacy chain, consistent
             # with aanswer_question's behaviour on invocation failure.
+            passages.clear()
             async for event in _astream_legacy(question, session_id):
                 yield event
             return
@@ -402,7 +516,8 @@ async def _astream_answer(question: str, session_id: str) -> AsyncIterator[Tuple
 
     answer = "".join(parts).strip()
     rag_service.add_chat_history(history, question, answer)
-    yield ("done", {"session_id": session_id, "answer": answer, "tools_used": tools_used})
+    sources = rag_service.cited_sources(answer)
+    yield ("done", {"session_id": session_id, "answer": answer, "tools_used": tools_used, "sources": sources})
 
 
 async def _astream_legacy(
@@ -439,13 +554,16 @@ async def _astream_legacy(
             yield ("token", {"text": chunk})
     except Exception:
         logger.exception("Legacy streaming failed; using the synchronous fallback.")
+        rag_service.turn_passages.get().clear()
         answer = await asyncio.to_thread(
             rag_service.answer_question, question, session_id
         )
+        sources = rag_service.cited_sources(answer)
         yield ("token", {"text": answer})
-        yield ("done", {"session_id": session_id, "answer": answer, "tools_used": []})
+        yield ("done", {"session_id": session_id, "answer": answer, "tools_used": [], "sources": sources})
         return
 
     answer = "".join(parts).strip()
     rag_service.add_chat_history(history, question, answer)
-    yield ("done", {"session_id": session_id, "answer": answer, "tools_used": []})
+    sources = rag_service.cited_sources(answer)
+    yield ("done", {"session_id": session_id, "answer": answer, "tools_used": [], "sources": sources})

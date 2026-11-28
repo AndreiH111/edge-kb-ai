@@ -16,11 +16,19 @@ class ChatRequest(BaseModel):
     history: Optional[List[ChatTurn]] = None
 
 
+class ChatSource(BaseModel):
+    """A passage the answer cites as ``[n]``, e.g. ``interns.xlsx (sheet Sheet1, row 5)``."""
+
+    n: int
+    locator: str
+
+
 class ChatResponse(BaseModel):
     session_id: str
     question: str
     answer: str
     tools_used: Optional[List[str]] = None
+    sources: Optional[List[ChatSource]] = None
 
 
 class AgentStatusResponse(BaseModel):
